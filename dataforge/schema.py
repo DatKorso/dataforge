@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from dataforge.db import get_connection
+
+
+@dataclass(frozen=True)
+class TableSchema:
+    name: str
+    create_sql: str
+    index_sql: List[Tuple[str, str]]  # (index_name, create_sql)
+
+
+def _oz_products_schema() -> TableSchema:
+    name = "oz_products"
+    # Hardcoded schema for readability and stability
+    create = f"""
+    CREATE TABLE IF NOT EXISTS "{name}" (
+        oz_vendor_code VARCHAR,
+        oz_product_id BIGINT,
+        oz_sku BIGINT,
+        "barcode-primary" VARCHAR,
+        product_name TEXT,
+        brand VARCHAR,
+        product_status VARCHAR,
+        tags TEXT,
+        reviews_count INTEGER,
+        rating DECIMAL(3,2),
+        visibility_status VARCHAR,
+        hide_reasons TEXT,
+        fbo_available INTEGER,
+        reserved_qty INTEGER,
+        current_price DECIMAL(10,2),
+        original_price DECIMAL(10,2),
+        premium_price DECIMAL(10,2),
+        market_price DECIMAL(10,2),
+        vat_rate VARCHAR(10),
+        discount_percent DECIMAL(5,2)
+    )
+    """
+
+    # Indexes (non-unique). Rebuilt after loads as the table is replaced.
+    idx_defs = [
+        (f"idx_{name}_oz_product_id", f'CREATE INDEX {{}} ON "{name}" (oz_product_id)'),
+        (f"idx_{name}_oz_sku", f'CREATE INDEX {{}} ON "{name}" (oz_sku)'),
+        (f"idx_{name}_oz_vendor_code", f'CREATE INDEX {{}} ON "{name}" (oz_vendor_code)'),
+        (f"idx_{name}_barcode_primary", f'CREATE INDEX {{}} ON "{name}" ("barcode-primary")'),
+    ]
+
+    # Fill in index name placeholders
+    index_sql: List[Tuple[str, str]] = []
+    for idx_name, tmpl in idx_defs:
+        index_sql.append((idx_name, tmpl.format(idx_name)))
+
+    return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+
+def get_all_schemas() -> Dict[str, TableSchema]:
+    prod = _oz_products_schema()
+
+    # Ozon orders schema (from docs/TZ_oz_orders_import.md)
+    def _oz_orders_schema() -> TableSchema:
+        name = "oz_orders"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            order_number VARCHAR(50),
+            shipment_number VARCHAR(50),
+            processing_date TIMESTAMP,
+            shipment_date TIMESTAMP,
+            status VARCHAR(100),
+            delivery_date TIMESTAMP,
+            actual_delivery_transfer_date TIMESTAMP,
+            shipment_amount DECIMAL(10,2),
+            shipment_currency_code VARCHAR(3),
+            product_name TEXT,
+            oz_product_id BIGINT,
+            oz_vendor_code VARCHAR(100),
+            your_product_cost DECIMAL(10,2),
+            product_currency_code VARCHAR(3),
+            customer_product_cost DECIMAL(10,2),
+            customer_currency_code VARCHAR(3),
+            quantity INTEGER,
+            delivery_cost DECIMAL(10,2),
+            related_shipments TEXT,
+            product_buyout VARCHAR(50),
+            price_before_discount DECIMAL(10,2),
+            discount_percent DECIMAL(5,2),
+            discount_amount DECIMAL(10,2),
+            promotions TEXT
+        )
+        """
+
+        idx_defs = [
+            (f"idx_{name}_oz_product_id", f'CREATE INDEX {{}} ON "{name}" (oz_product_id)'),
+            (f"idx_{name}_oz_vendor_code", f'CREATE INDEX {{}} ON "{name}" (oz_vendor_code)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    orders = _oz_orders_schema()
+
+    # Ozon products full schema
+    def _oz_products_full_schema() -> TableSchema:
+        name = "oz_products_full"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            oz_vendor_code VARCHAR(100),
+            product_name VARCHAR(500),
+            price DECIMAL(10,2),
+            price_before_discount DECIMAL(10,2),
+            vat_percent INTEGER,
+            barcodes TEXT,
+            primary_barcode VARCHAR(50),
+            weight_grams INTEGER,
+            package_width_mm INTEGER,
+            package_height_mm INTEGER,
+            package_length_mm INTEGER,
+            main_photo_url TEXT,
+            additional_photos_urls TEXT,
+            photo_article VARCHAR(100),
+            brand VARCHAR(100),
+            group_on_card VARCHAR(100),
+            color VARCHAR(100),
+            russian_size VARCHAR(20),
+            color_name VARCHAR(100),
+            manufacturer_size VARCHAR(20),
+            product_type VARCHAR(100),
+            gender VARCHAR(20),
+            season VARCHAR(50),
+            group_name VARCHAR(200),
+            error_message TEXT,
+            warning_message TEXT,
+            video_name VARCHAR(500),
+            video_url TEXT,
+            video_products TEXT,
+            video_cover_url TEXT,
+            import_date TIMESTAMP,
+            source_file VARCHAR(255)
+        )
+        """
+
+        idx_defs = [
+            (f"idx_{name}_oz_vendor_code", f'CREATE INDEX {{}} ON "{name}" (oz_vendor_code)'),
+            (f"idx_{name}_primary_barcode", f'CREATE INDEX {{}} ON "{name}" (primary_barcode)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    prod_full = _oz_products_full_schema()
+    
+    # WB products schema
+    def _wb_products_schema() -> TableSchema:
+        name = "wb_products"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            group_id INTEGER,
+            wb_article VARCHAR(100),
+            wb_sku BIGINT,
+            product_name VARCHAR(500),
+            seller_category VARCHAR(200),
+            brand VARCHAR(100),
+            description TEXT,
+            photos TEXT,
+            video_url VARCHAR(500),
+            gender VARCHAR(50),
+            color VARCHAR(100),
+            barcodes TEXT,
+            primary_barcode VARCHAR(50),
+            size VARCHAR(20),
+            russian_size VARCHAR(20),
+            weight_kg DECIMAL(8,3),
+            package_height_cm DECIMAL(8,2),
+            package_length_cm DECIMAL(8,2),
+            package_width_cm DECIMAL(8,2),
+            package_volume_cm3 DECIMAL(12,2),
+            tnved_code VARCHAR(20),
+            card_rating DECIMAL(3,1),
+            labels TEXT,
+            vat_rate VARCHAR(20),
+            source_file VARCHAR(255)
+        )
+        """
+        idx_defs = [
+            (f"idx_{name}_wb_sku", f'CREATE INDEX {{}} ON "{name}" (wb_sku)'),
+            (f"idx_{name}_primary_barcode", f'CREATE INDEX {{}} ON "{name}" (primary_barcode)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    # WB prices schema
+    def _wb_prices_schema() -> TableSchema:
+        name = "wb_prices"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            brand VARCHAR(100),
+            category VARCHAR(150),
+            wb_sku VARCHAR(50),
+            wb_vendor_code VARCHAR(100),
+            barcode_primary VARCHAR(50),
+            wb_stock INTEGER,
+            current_price DECIMAL(10,2),
+            current_discount DECIMAL(5,2)
+        )
+        """
+        idx_defs = [
+            (f"idx_{name}_wb_sku", f'CREATE INDEX {{}} ON "{name}" (wb_sku)'),
+            (f"idx_{name}_barcode_primary", f'CREATE INDEX {{}} ON "{name}" (barcode_primary)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    wb_prod = _wb_products_schema()
+    wb_prices_tbl = _wb_prices_schema()
+    return {
+        prod.name: prod,
+        orders.name: orders,
+        prod_full.name: prod_full,
+        wb_prod.name: wb_prod,
+        wb_prices_tbl.name: wb_prices_tbl,
+    }
+
+
+def init_schema(md_token: Optional[str] = None, md_database: Optional[str] = None) -> List[str]:
+    messages: List[str] = []
+    with get_connection(md_token=md_token, md_database=md_database) as con:
+        for tbl in get_all_schemas().values():
+            con.execute(tbl.create_sql)
+            messages.append(f"ensured table {tbl.name}")
+    return messages
+
+
+def rebuild_indexes(
+    *,
+    md_token: Optional[str] = None,
+    md_database: Optional[str] = None,
+    table: Optional[str] = None,
+) -> List[str]:
+    """Drop and recreate indexes for given table or all.
+
+    DuckDB may drop indexes on CREATE OR REPLACE TABLE; this restores them.
+    """
+    messages: List[str] = []
+    schemas = get_all_schemas()
+    targets: Iterable[TableSchema]
+    if table:
+        ts = schemas.get(table)
+        if not ts:
+            return [f"no schema known for table {table}"]
+        targets = [ts]
+    else:
+        targets = schemas.values()
+
+    with get_connection(md_token=md_token, md_database=md_database) as con:
+        for ts in targets:
+            for idx_name, create_sql in ts.index_sql:
+                con.execute(f"DROP INDEX IF EXISTS {idx_name}")
+                con.execute(create_sql)
+                messages.append(f"rebuilt index {idx_name} on {ts.name}")
+    return messages
