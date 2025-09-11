@@ -1,4 +1,7 @@
 import streamlit as st
+from dataforge.ui import setup_page
+
+setup_page(title="DataForge", icon="🛠️")
 
 st.title("📊 Overview")
 st.write("High-level KPIs, charts, and summaries go here.")
@@ -13,4 +16,3 @@ with col3:
 
 st.divider()
 st.area_chart({"Series A": [3, 4, 3, 5, 4, 6]})
-

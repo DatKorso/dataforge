@@ -5,10 +5,12 @@ from typing import List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+from dataforge.ui import setup_page
 from dataforge.db import get_connection
 from dataforge.imports.loader import quote_ident
 
 
+setup_page(title="DataForge", icon="🛠️")
 st.title("🗂️ Просмотр таблиц БД")
 st.caption("Выберите таблицу MotherDuck, выполните поиск и просматривайте данные постранично.")
 

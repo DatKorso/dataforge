@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import streamlit as st
 
+from dataforge.ui import setup_page
 from dataforge.imports.loader import load_dataframe
 from dataforge.imports.assemblers import (
     assemble_ozon_products_full,
@@ -18,6 +19,7 @@ from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
 
 
+setup_page(title="DataForge", icon="🛠️")
 st.title("📥 Импорт файлов")
 st.caption(
     "Загрузочный хаб для обновления таблиц БД. Добавляйте отчёты маркетплейсов и загружайте в MotherDuck."

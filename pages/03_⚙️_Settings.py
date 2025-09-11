@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import streamlit as st
+from dataforge.ui import setup_page
 
 from dataforge.db import check_connection
 from dataforge.secrets import load_secrets, save_secrets
 from dataforge.schema import init_schema, rebuild_indexes
 
 
+setup_page(title="DataForge", icon="🛠️")
 st.title("⚙️ Settings")
 
 # --- MotherDuck configuration ---
