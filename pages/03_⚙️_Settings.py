@@ -41,7 +41,12 @@ md_database = st.text_input("MD база данных", value=default_db, placeh
 cols = st.columns(2)
 with cols[0]:
     if st.button("Сохранить в secrets.toml"):
-        save_secrets({"md_token": md_token, "md_database": md_database})
+        # Persist MD creds and brand filter in secrets for convenience
+        save_secrets({
+            "md_token": md_token,
+            "md_database": md_database,
+            "brand_whitelist": st.session_state.get("brand_whitelist", ""),
+        })
         st.session_state["md_token"] = md_token
         st.session_state["md_database"] = md_database
         st.success("Секреты сохранены в .streamlit/secrets.toml")
@@ -67,6 +72,22 @@ with cols2[0]:
         st.success("Выполнено:")
         for m in msgs:
             st.write(f"• {m}")
+
+st.divider()
+st.subheader("Фильтр брендов")
+st.caption(
+    "Укажите бренды, которые вы ведёте. При импорте будут загружены только строки с этими брендами. "
+    "Список через точку с запятой, например: Nike; Puma; Adidas"
+)
+
+# Read persisted value or session state
+_brand_default = (
+    st.session_state.get("brand_whitelist")
+    or _secret_from_streamlit("brand_whitelist")
+    or existing.get("brand_whitelist", "")
+)
+brand_text = st.text_input("Список брендов", value=_brand_default)
+st.session_state["brand_whitelist"] = brand_text
 
 with cols2[1]:
     if st.button("Перестроить индексы"):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +17,7 @@ from dataforge.imports.assemblers import (
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
+from dataforge.utils import parse_brand_list, filter_df_by_brands
 
 
 setup_page(title="DataForge", icon="🛠️")
@@ -180,7 +181,24 @@ if has_files:
                 with st.spinner("Нормализация и валидация..."):
                     vr: ValidationResult = normalize_and_validate(df_src, spec)
 
-                st.session_state["norm_df"] = vr.df_normalized
+                # Apply brand filter (if configured and applicable)
+                def _sget(key: str) -> Optional[str]:
+                    try:
+                        return st.secrets[key]  # type: ignore[index]
+                    except Exception:
+                        return None
+
+                brand_raw = st.session_state.get("brand_whitelist") or _sget("brand_whitelist")
+                allowed_brands = parse_brand_list(brand_raw)
+
+                df_norm = vr.df_normalized
+                df_filtered = (
+                    filter_df_by_brands(df_norm, allowed_brands)
+                    if ("brand" in df_norm.columns and allowed_brands)
+                    else df_norm
+                )
+
+                st.session_state["norm_df"] = df_filtered
                 st.session_state["norm_errors"] = vr.errors
 
                 st.subheader("Сводка")
@@ -188,6 +206,12 @@ if has_files:
                 m1.metric("Всего строк", vr.rows_total)
                 m2.metric("Валидных строк", vr.rows_valid)
                 m3.metric("Ошибок", len(vr.errors))
+
+                if "brand" in df_norm.columns and allowed_brands:
+                    st.info(
+                        f"Применён фильтр брендов (в списке: {len(allowed_brands)}). "
+                        f"К загрузке после фильтра: {len(df_filtered)} строк."
+                    )
 
                 if vr.errors:
                     st.warning("Обнаружены ошибки. Строки с ошибками будут пропущены при импорте.")
@@ -209,7 +233,7 @@ if has_files:
                         st.info(f"Лог ошибок сохранён: {log_path}")
 
                 st.subheader("Нормализованные данные (превью)")
-                st.dataframe(_arrow_safe(vr.df_normalized.head(20)), width="stretch")
+                st.dataframe(_arrow_safe(df_filtered.head(20)), width="stretch")
 
                 csv_buf = io.StringIO()
                 vr.df_normalized.to_csv(csv_buf, index=False)
@@ -239,6 +263,12 @@ if has_files:
                     md_database = st.session_state.get("md_database") or _sget("md_database")
                     if not md_token:
                         st.warning("MD токен не найден. Укажите его на странице Настройки.")
+
+                    # Re-apply brand filter using the latest settings just before import (safety net)
+                    brand_raw = st.session_state.get("brand_whitelist") or _sget("brand_whitelist")
+                    allowed_brands = parse_brand_list(brand_raw)
+                    if "brand" in df_ready.columns and allowed_brands:
+                        df_ready = filter_df_by_brands(df_ready, allowed_brands)
 
                     with st.spinner("Загрузка в MotherDuck..."):
                         if report_id == "punta_barcodes":
