@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import pandas as pd
 
-from .registry import ColumnSpec, ReportSpec
+from .registry import ReportSpec
 from .transformers import TRANSFORMERS
 
 
@@ -33,9 +33,6 @@ def normalize_and_validate(df_raw: pd.DataFrame, spec: ReportSpec) -> Validation
     # Build normalized rows
     errors: List[Dict[str, Any]] = []
     out_rows: List[Dict[str, Any]] = []
-
-    # Prepare source -> ColumnSpec map for quick lookup
-    src_map: Dict[str, ColumnSpec] = {c.source: c for c in spec.columns}
 
     for idx, row in df.iterrows():
         record: Dict[str, Any] = {}
@@ -102,4 +99,3 @@ def _detect_duplicates(df: pd.DataFrame, keys: List[str]) -> List[Dict[str, Any]
         key_vals = {k: grp.iloc[0][k] for k in keys}
         msgs.append({"row": None, "errors": f"duplicate batch keys: {key_vals}"})
     return msgs
-

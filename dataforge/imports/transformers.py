@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import math
 import re
 import pandas as pd
 from typing import Any, Optional

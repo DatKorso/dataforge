@@ -1,14 +1,12 @@
 from __future__ import annotations
 
+import streamlit as st
+
 """UI helpers for Streamlit pages.
 
 Expose a single setup function to enforce a consistent, wide layout
 across all pages in the multipage app.
 """
-
-from typing import Optional
-
-import streamlit as st
 
 
 def setup_page(
@@ -34,4 +32,3 @@ def setup_page(
         layout="wide",
         initial_sidebar_state=sidebar_state,
     )
-

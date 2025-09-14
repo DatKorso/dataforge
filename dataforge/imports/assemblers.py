@@ -77,7 +77,7 @@ def assemble_ozon_products_full(files: Iterable[Any]) -> pd.DataFrame:
 
         try:
             base = pd.read_excel(bio, sheet_name="Шаблон", header=1, engine="openpyxl")
-        except Exception as e1:
+        except Exception:
             # Retry with default sheet (some files may vary)
             try:
                 bio.seek(0)

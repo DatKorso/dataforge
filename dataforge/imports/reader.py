@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from io import BytesIO, StringIO
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import pandas as pd
 
