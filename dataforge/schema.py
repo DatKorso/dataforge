@@ -221,12 +221,41 @@ def get_all_schemas() -> Dict[str, TableSchema]:
 
     wb_prod = _wb_products_schema()
     wb_prices_tbl = _wb_prices_schema()
+    
+    # Punta barcodes schema
+    def _punta_barcodes_schema() -> TableSchema:
+        name = "punta_barcodes"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            collection VARCHAR(100),
+            pn_article VARCHAR(100),
+            product_type VARCHAR(50),
+            external_code VARCHAR(50),
+            size VARCHAR(100),
+            barcode VARCHAR(50),
+            tn_ved VARCHAR(50)
+        )
+        """
+        idx_defs = [
+            (f"idx_{name}_pn_article", f'CREATE INDEX {{}} ON "{name}" (pn_article)'),
+            (f"idx_{name}_size", f'CREATE INDEX {{}} ON "{name}" (size)'),
+            (f"idx_{name}_external_code", f'CREATE INDEX {{}} ON "{name}" (external_code)'),
+            (f"idx_{name}_barcode", f'CREATE INDEX {{}} ON "{name}" (barcode)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    punta_bc = _punta_barcodes_schema()
+
     return {
         prod.name: prod,
         orders.name: orders,
         prod_full.name: prod_full,
         wb_prod.name: wb_prod,
         wb_prices_tbl.name: wb_prices_tbl,
+        punta_bc.name: punta_bc,
     }
 
 
@@ -236,6 +265,15 @@ def init_schema(md_token: Optional[str] = None, md_database: Optional[str] = Non
         for tbl in get_all_schemas().values():
             con.execute(tbl.create_sql)
             messages.append(f"ensured table {tbl.name}")
+        # Lightweight migration: rename legacy column tn_vad -> tn_ved for punta_barcodes
+        try:
+            info = con.execute('PRAGMA table_info("punta_barcodes")').fetch_df()
+            if not info.empty and (info["name"] == "tn_vad").any():
+                con.execute('ALTER TABLE "punta_barcodes" RENAME COLUMN "tn_vad" TO "tn_ved"')
+                messages.append("migrated punta_barcodes: tn_vad -> tn_ved")
+        except Exception:
+            # Best effort; ignore if table doesn't exist yet or ALTER not supported
+            pass
     return messages
 
 

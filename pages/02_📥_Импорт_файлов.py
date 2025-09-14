@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from dataforge.ui import setup_page
-from dataforge.imports.loader import load_dataframe
+from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
 from dataforge.imports.assemblers import (
     assemble_ozon_products_full,
     assemble_wb_products,
@@ -33,6 +33,16 @@ report_id = SPEC_OPTIONS[report_name]
 spec: ReportSpec = REGISTRY[report_id]
 
 st.info(spec.description)
+
+# Дополнительные параметры для отдельных отчётов
+punta_collection: Optional[str] = None
+if report_id == "punta_barcodes":
+    punta_collection = st.text_input(
+        "Коллекция",
+        value=st.session_state.get("punta_collection", ""),
+        help="Укажите название коллекции. Перед загрузкой данные этой коллекции будут очищены.",
+    )
+    st.session_state["punta_collection"] = punta_collection
 
 uploaded = st.file_uploader(
     "Загрузите файл(ы) отчёта",
@@ -89,6 +99,8 @@ with st.expander("Параметры импорта", expanded=False):
         value=True,
         help="Рекомендуется для отчётов, которые представляют полное состояние (например, список товаров)",
     )
+    if report_id == "punta_barcodes":
+        st.caption("Для Punta очистка применяется только к выбранной коллекции.")
 
 def _ext_from_name(name: str) -> str:
     return Path(name).suffix.lstrip(".").lower()
@@ -153,6 +165,15 @@ if has_files:
                             uploaded, ext, delimiter=delimiter, encoding=enc, header_row=int(header_row) - 1
                         )
 
+                # Подстановка значения коллекции для отчёта Punta
+                if report_id == "punta_barcodes":
+                    if not punta_collection:
+                        st.warning("Укажите значение поля 'Коллекция' перед предпросмотром.")
+                        st.stop()
+                    df_src = df_src.copy()
+                    # Всегда подставляем единое значение; игнорируем содержимое файла при наличии колонки
+                    df_src["Коллекция"] = punta_collection
+
                 st.session_state["last_src_preview"] = df_src.head(5)
                 st.dataframe(_arrow_safe(df_src.head(10)), width="stretch")
 
@@ -171,6 +192,21 @@ if has_files:
                 if vr.errors:
                     st.warning("Обнаружены ошибки. Строки с ошибками будут пропущены при импорте.")
                     st.dataframe(_arrow_safe(pd.DataFrame(vr.errors)), width="stretch")
+
+                    # Логирование ошибок в файл (только для Punta)
+                    if report_id == "punta_barcodes":
+                        from datetime import datetime
+                        from pathlib import Path as _Path
+
+                        log_dir = _Path("logs")
+                        log_dir.mkdir(exist_ok=True)
+                        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                        log_path = log_dir / f"punta_barcodes_{ts}.log"
+                        lines = [
+                            f"row={e.get('row')} | errors={e.get('errors')}" for e in vr.errors
+                        ]
+                        log_path.write_text("\n".join(lines), encoding="utf-8")
+                        st.info(f"Лог ошибок сохранён: {log_path}")
 
                 st.subheader("Нормализованные данные (превью)")
                 st.dataframe(_arrow_safe(vr.df_normalized.head(20)), width="stretch")
@@ -205,13 +241,28 @@ if has_files:
                         st.warning("MD токен не найден. Укажите его на странице Настройки.")
 
                     with st.spinner("Загрузка в MotherDuck..."):
-                        msg = load_dataframe(
-                            df_ready,
-                            table=spec.table,
-                            md_token=md_token,
-                            md_database=md_database,
-                            replace=clear_table,
-                        )
+                        if report_id == "punta_barcodes":
+                            # Для Punta всегда заменяем данные конкретной коллекции
+                            coll = st.session_state.get("punta_collection")
+                            if not coll:
+                                st.error("Не указана коллекция для загрузки.")
+                                st.stop()
+                            msg = load_dataframe_partitioned(
+                                df_ready,
+                                table=spec.table,
+                                partition_field="collection",
+                                partition_value=str(coll),
+                                md_token=md_token,
+                                md_database=md_database,
+                            )
+                        else:
+                            msg = load_dataframe(
+                                df_ready,
+                                table=spec.table,
+                                md_token=md_token,
+                                md_database=md_database,
+                                replace=clear_table,
+                            )
                     st.success(msg)
             except Exception as exc:  # noqa: BLE001
                 st.exception(exc)

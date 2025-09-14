@@ -61,17 +61,16 @@ def read_any(
             sniffed = sniff_delimiter(text[:50_000])
             delimiter = sniffed
         if delimiter is None:
-            # fallback to pandas inference
-            df = pd.read_csv(StringIO(text), sep=None, engine="python", header=header_row)
+            # fallback to pandas inference; force text to preserve leading zeros
+            df = pd.read_csv(StringIO(text), sep=None, engine="python", header=header_row, dtype=str)
         else:
-            df = pd.read_csv(StringIO(text), sep=delimiter, header=header_row)
+            df = pd.read_csv(StringIO(text), sep=delimiter, header=header_row, dtype=str)
         return df
 
-    if ext.lower() in {"xlsx", "xlsm"}:
+    if ext.lower() in {"xlsx", "xlsm", "xls"}:
         bio = BytesIO(raw)
         # openpyxl ensures better compatibility
-        df = pd.read_excel(bio, engine="openpyxl", header=header_row)
+        df = pd.read_excel(bio, engine="openpyxl", header=header_row, dtype=str)
         return df
 
     raise ValueError(f"Unsupported extension: {ext}")
-

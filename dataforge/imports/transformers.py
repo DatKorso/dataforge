@@ -196,11 +196,61 @@ def lower_clean(v: Any) -> Optional[str]:
 
 
 def digits_only(v: Any) -> Optional[str]:
-    s = string_clean(v)
-    if s is None:
+    """Keep only digits, handling numeric inputs without appending bogus trailing zeros.
+
+    - If value is int -> stringify
+    - If value is float and is integer (e.g., 12345.0) -> int -> str
+    - Otherwise, normalize to string and strip non-digits
+    """
+    if v is None:
         return None
+    if isinstance(v, int):
+        s = str(v)
+    elif isinstance(v, float):
+        s = str(int(v)) if v.is_integer() else string_clean(v) or ""
+    else:
+        s = string_clean(v) or ""
     s = re.sub(r"[^0-9]", "", s)
     return s if s else None
+
+
+def code_text(v: Any) -> Optional[str]:
+    """Convert values that may be read as numbers into stable text codes.
+
+    Behaviors:
+    - None/empty -> None
+    - float that is an integer (e.g., 12345.0) -> "12345"
+    - float with trailing zeros -> strip trailing .0/.00 (keeps integer part)
+    - other values -> string_clean result
+    Does not strip leading zeros or non-digit characters; preserves text form.
+    """
+    # Preserve None/empty first
+    if v is None:
+        return None
+    # If it's already a string, normalize and trim trailing .0 patterns
+    if isinstance(v, str):
+        s = string_clean(v)
+        if s is None:
+            return None
+        # If the value looks like a number with .0 or .00, strip decimals
+        if re.fullmatch(r"-?[0-9]+\.(?:0+)", s):
+            return s.split(".")[0]
+        return s
+    # Numeric handling
+    try:
+        # pandas may give numpy types; handle floats specially
+        if isinstance(v, float):
+            if v.is_integer():
+                return str(int(v))
+            # Fallback: drop trailing zeros if any when stringified
+            s = ("{:.8f}".format(v)).rstrip("0").rstrip(".")
+            return s
+        if isinstance(v, int):
+            return str(v)
+    except Exception:
+        pass
+    # Fallback to generic string cleaning
+    return string_clean(v)
 
 
 def timestamp(v: Any) -> Optional[pd.Timestamp]:
@@ -262,4 +312,5 @@ TRANSFORMERS = {
     "urls_json": urls_json,
     "lower_clean": lower_clean,
     "digits_only": digits_only,
+    "code_text": code_text,
 }

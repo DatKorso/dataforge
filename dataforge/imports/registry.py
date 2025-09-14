@@ -317,10 +317,41 @@ def get_registry() -> Dict[str, ReportSpec]:
         assembler="wb_prices",
     )
 
+    # Punta barcodes (single file, sheet 'Sheet')
+    punta_barcodes = ReportSpec(
+        id="punta_barcodes",
+        name="Punta — Штрихкоды",
+        description=(
+            "Импорт Excel с данными по штрихкодам Punta. Перед загрузкой пользователь "
+            "должен указать значение 'Коллекция'; перед вставкой все записи этой коллекции "
+            "в таблице будут удалены."
+        ),
+        table="punta_barcodes",
+        allowed_extensions=["xlsx", "xls"],
+        default_encoding="utf-8",
+        delimiter=None,
+        header_row=0,  # заголовки в первой строке
+        columns=[
+            # 'Коллекция' подставляется из интерфейса, но допускаем наличие колонки в файле
+            ColumnSpec("Коллекция", "collection", required=True, transform="string_clean"),
+            ColumnSpec("Артикул", "pn_article", required=True, transform="string_clean"),
+            ColumnSpec("Вид товара", "product_type", required=False, transform="string_clean"),
+            ColumnSpec("Внешний код", "external_code", required=True, transform="code_text"),
+            ColumnSpec("Размер", "size", required=False, transform="string_clean"),
+            ColumnSpec("Штрихкод", "barcode", required=False, transform="digits_only"),
+            ColumnSpec("ТН ВЭД", "tn_ved", required=False, transform="code_text"),
+        ],
+        unique_fields_in_batch=["pn_article", "size", "external_code", "barcode"],
+        computed_fields={},
+        multi_file=False,
+        assembler=None,
+    )
+
     return {
         ozon_products.id: ozon_products,
         ozon_orders.id: ozon_orders,
         ozon_products_full.id: ozon_products_full,
         wb_products.id: wb_products,
         wb_prices.id: wb_prices,
+        punta_barcodes.id: punta_barcodes,
     }

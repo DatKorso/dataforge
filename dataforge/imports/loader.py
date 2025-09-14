@@ -101,3 +101,71 @@ def load_dataframe(
         con.execute(f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load")
         rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
         return f"Inserted {len(df)} rows into {table} and ensured indexes"
+
+
+def load_dataframe_partitioned(
+    df: pd.DataFrame,
+    table: str,
+    *,
+    partition_field: str,
+    partition_value: str,
+    md_token: Optional[str] = None,
+    md_database: Optional[str] = None,
+) -> str:
+    """Load a DataFrame by replacing a single partition identified by a field/value.
+
+    This is used for reports where data is logically grouped by a user-provided
+    key (e.g., "collection"). The function:
+    - Ensures schema exists
+    - Aligns columns to the target table
+    - Deletes existing rows for the partition
+    - Inserts new rows
+    - Rebuilds indexes
+    Returns a short status message.
+    """
+    if df.empty:
+        return "DataFrame is empty; nothing to load"
+
+    with get_connection(md_token=md_token, md_database=md_database) as con:
+        con.register("df_to_load", df)
+
+        # Ensure target schema exists
+        init_schema(md_token=md_token, md_database=md_database)
+
+        # Determine target columns from table
+        try:
+            info = con.execute(f"PRAGMA table_info({quote_ident(table)})").fetch_df()
+            target_cols = [str(x) for x in info["name"].tolist()]
+        except Exception:
+            target_cols = list(df.columns)
+
+        # Ensure DataFrame has all required columns (fill missing with None)
+        for c in target_cols:
+            if c not in df.columns:
+                df[c] = None
+
+        # Re-register limiting to target columns to preserve order and types
+        con.unregister("df_to_load")
+        con.register("df_to_load", df[target_cols])
+
+        cols = ", ".join(quote_ident(c) for c in target_cols)
+
+        # Transactional replace of the partition
+        con.execute("BEGIN TRANSACTION")
+        try:
+            con.execute(
+                f"DELETE FROM {quote_ident(table)} WHERE {quote_ident(partition_field)} = ?",
+                [partition_value],
+            )
+            con.execute(
+                f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load",
+            )
+            con.execute("COMMIT")
+        except Exception:  # noqa: BLE001
+            con.execute("ROLLBACK")
+            raise
+
+        rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+        return (
+            f"Replaced partition where {partition_field}={partition_value!r} in {table}; indexes rebuilt"
+        )
