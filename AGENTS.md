@@ -1,53 +1,43 @@
 # Repository Guidelines
 
-This repository contains a Streamlit multipage dashboard. Use `dataforge/` for shared
-logic, keep page modules self-contained, and verify changes with linting and tests.
+This repository hosts a Streamlit multi‑page dashboard. Keep reusable logic in `dataforge/` and page code self‑contained under `pages/`.
 
 ## Project Structure & Module Organization
 - `app.py` — Streamlit entry point and global page config.
-- `pages/` — multipage modules auto-discovered by Streamlit. Name as
-  `NN_Icon_Title.py` (e.g., `01_📊_Overview.py`). Keep code self-contained; UI text in
-  Russian.
-- `dataforge/` — shared Python package (e.g., `utils.py`). Put reusable logic and
-  validation here; import from pages.
-- `.streamlit/config.toml` — theme/server settings. Secrets via
-  `.streamlit/secrets.toml`.
-- `pyproject.toml` — project metadata, `uv` config, and `ruff` settings.
+- `pages/` — modules auto‑discovered by Streamlit, named `NN_Icon_Title.py` (e.g., `01_📊_Обзор.py`). UI text in Russian; no cross‑module imports.
+- `dataforge/` — shared package (e.g., `utils.py`, validators). Prefer helpers here over duplication; avoid side effects.
+- `.streamlit/config.toml` and `.streamlit/secrets.toml` — theme/server and secrets.
+- `tests/` — pytest suite mirroring package paths; fixtures in `tests/fixtures/`.
 
 ## Build, Test, and Development Commands
-- Install deps (editable): `uv sync`
-- Run app: `uv run streamlit run app.py`
-- Lint: `ruff check .`  (auto-fix: `ruff check --fix .`)
-- Add dev tools (once): `uv pip install -U ruff pytest`
-- Run tests: `pytest -q`
+- `uv sync` — install project dependencies (editable mode).
+- `uv run streamlit run app.py` — run the app locally.
+- `ruff check .` / `ruff check --fix .` — lint and auto‑fix style issues.
+- `uv pip install -U ruff pytest` — one‑time install of dev tools.
+- `pytest -q` — run tests quietly.
 
 ## Coding Style & Naming Conventions
-- PEP 8, 4-space indents, max line length 100.
-- Type hints on public functions; concise, focused docstrings.
-- Naming: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
-- Prefer helpers in `dataforge/` over duplicating logic. Avoid side effects; limit globals to
-  `st.session_state` when necessary.
+- PEP 8; 4‑space indents; max line length 100.
+- Public functions use type hints; concise, focused docstrings.
+- Names: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
+- Minimize globals; use `st.session_state` for state when needed.
+- Keep page modules self‑contained; import shared logic from `dataforge/`.
 
 ## Testing Guidelines
-- Framework: `pytest`. Place tests under `tests/`, mirroring package paths.
-- Filenames: `tests/test_*.py`; fixtures under `tests/fixtures/`.
-- Focus on `dataforge` utilities and page-level helpers. Keep tests fast and isolated; avoid
-  network and unnecessary I/O.
-- Run locally with `pytest -q` before submitting.
+- Framework: `pytest`. File names `tests/test_*.py`; fixtures in `tests/fixtures/`.
+- Focus on `dataforge` utilities and page‑level helpers.
+- Keep tests fast and isolated; avoid network calls and unnecessary I/O.
 
 ## Commit & Pull Request Guidelines
-- Commits: concise, present tense (e.g., `pages: add data preview tab`,
-  `dataforge: add load_csv helper`).
-- PRs: clear description, screenshots for UI changes, steps to verify, and linked issues
-  (e.g., `Closes #123`). Keep diffs focused and aligned with this guide.
+- Commits: concise, present tense with scope (e.g., `pages: add data preview tab`, `dataforge: add load_csv helper`).
+- PRs: clear description, screenshots for UI changes, steps to verify, and linked issues (e.g., `Closes #123`). Keep diffs focused.
 
 ## Security & Configuration Tips
-- Do not commit secrets. Use env vars or `.streamlit/secrets.toml`.
-- Validate and limit file uploads (size, type). Never execute user-provided content.
-- Centralize validation and parsing in `dataforge/` to reduce risk.
+- Never commit secrets; use env vars or `.streamlit/secrets.toml`.
+- Validate and limit file uploads (size, type). Never execute user‑provided content.
+- Centralize parsing/validation in `dataforge/` to reduce risk.
 
-## Agent-Specific Instructions
-- These guidelines apply repo-wide. If nested `AGENTS.md` files exist, the deepest one
-  takes precedence for its subtree.
-- Keep changes minimal and consistent with existing code. Update docs/tests when changing
-  behavior.
+## Agent‑Specific Instructions
+- This file applies repo‑wide. If nested `AGENTS.md` files exist, the deepest one overrides for its subtree.
+- Keep changes minimal and consistent; update docs/tests when behavior changes.
+
