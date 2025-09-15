@@ -347,6 +347,27 @@ def get_registry() -> Dict[str, ReportSpec]:
         assembler=None,
     )
 
+    # Punta Google (dynamic schema from Google Sheets CSV)
+    punta_google = ReportSpec(
+        id="punta_google",
+        name="Punta — Google",
+        description=(
+            "Загрузка из Google Sheets по ссылке (без API). 1-я строка — заголовки, "
+            "2-я строка пропускается, с 3-й строки — данные. Схема таблицы динамически "
+            "соответствует заголовкам. Все поля — текст."
+        ),
+        table="punta_google",
+        allowed_extensions=[],  # uploader не используется
+        default_encoding="utf-8",
+        delimiter=None,
+        header_row=0,
+        columns=[],
+        unique_fields_in_batch=[],
+        computed_fields={},
+        multi_file=False,
+        assembler=None,
+    )
+
     return {
         ozon_products.id: ozon_products,
         ozon_orders.id: ozon_orders,
@@ -354,4 +375,5 @@ def get_registry() -> Dict[str, ReportSpec]:
         wb_products.id: wb_products,
         wb_prices.id: wb_prices,
         punta_barcodes.id: punta_barcodes,
+        punta_google.id: punta_google,
     }

@@ -9,6 +9,13 @@ import streamlit as st
 
 from dataforge.ui import setup_page
 from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
+from dataforge.imports.google_sheets import (
+    check_access as gs_check_access,
+    read_csv_first_sheet as gs_read_csv,
+    dedup_by_wb_sku_first as gs_dedup,
+)
+from dataforge.secrets import save_secrets
+from dataforge.db import get_connection
 from dataforge.imports.assemblers import (
     assemble_ozon_products_full,
     assemble_wb_products,
@@ -35,26 +42,7 @@ spec: ReportSpec = REGISTRY[report_id]
 
 st.info(spec.description)
 
-# Дополнительные параметры для отдельных отчётов
-punta_collection: Optional[str] = None
-if report_id == "punta_barcodes":
-    punta_collection = st.text_input(
-        "Коллекция",
-        value=st.session_state.get("punta_collection", ""),
-        help="Укажите название коллекции. Перед загрузкой данные этой коллекции будут очищены.",
-    )
-    st.session_state["punta_collection"] = punta_collection
-
-uploaded = st.file_uploader(
-    "Загрузите файл(ы) отчёта",
-    type=spec.allowed_extensions,
-    accept_multiple_files=spec.multi_file,
-    help=(
-        "Поддерживаются .csv и .xlsx (Excel). Для полных товаров Ozon допустима загрузка нескольких файлов."
-    ),
-)
-
-
+# Define _arrow_safe early so it can be used in all branches
 def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
     """Sanitize a DataFrame to avoid Arrow serialization issues in Streamlit.
 
@@ -82,26 +70,90 @@ def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = s.map(_to_str)
     return out
 
-with st.expander("Параметры импорта", expanded=False):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        delim_label = st.selectbox(
-            "Разделитель (CSV)",
-            options=["Авто", "Запятая ,", "Точка с запятой ;", "Табуляция \t"],
-            index=0,
-        )
-    with col2:
-        encoding = st.selectbox("Кодировка", options=["utf-8", "cp1251", "auto"], index=0)
-    with col3:
-        header_row = st.number_input("Строка заголовков", min_value=1, value=spec.header_row + 1)
-
-    clear_table = st.checkbox(
-        "Очищать таблицу перед загрузкой",
-        value=True,
-        help="Рекомендуется для отчётов, которые представляют полное состояние (например, список товаров)",
+# Дополнительные параметры для отдельных отчётов
+punta_collection: Optional[str] = None
+if report_id == "punta_barcodes":
+    punta_collection = st.text_input(
+        "Коллекция",
+        value=st.session_state.get("punta_collection", ""),
+        help="Укажите название коллекции. Перед загрузкой данные этой коллекции будут очищены.",
     )
-    if report_id == "punta_barcodes":
-        st.caption("Для Punta очистка применяется только к выбранной коллекции.")
+    st.session_state["punta_collection"] = punta_collection
+
+uploaded = None
+gs_url: Optional[str] = None
+if report_id != "punta_google":
+    uploaded = st.file_uploader(
+        "Загрузите файл(ы) отчёта",
+        type=spec.allowed_extensions,
+        accept_multiple_files=spec.multi_file,
+        help=(
+            "Поддерживаются .csv и .xlsx (Excel). Для полных товаров Ozon допустима загрузка нескольких файлов."
+        ),
+    )
+else:
+    # Один источник Google Sheets — ссылка сохраняется в secrets.toml
+    def _sget_secret(key: str) -> Optional[str]:
+        try:
+            return st.secrets[key]  # type: ignore[index]
+        except Exception:
+            return None
+
+    gs_url = st.text_input(
+        "Ссылка на Google Sheets",
+        value=st.session_state.get("punta_google_url") or _sget_secret("punta_google_url") or "",
+        placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing",
+        help="Вставьте публичную ссылку на документ. Используется первый лист. 2-я строка будет пропущена.",
+    )
+    st.session_state["punta_google_url"] = gs_url
+    cols_gs = st.columns(3)
+    with cols_gs[0]:
+        if st.button("Сохранить ссылку"):
+            save_secrets({"punta_google_url": gs_url})
+            st.success("Ссылка сохранена в .streamlit/secrets.toml")
+    with cols_gs[1]:
+        if st.button("Проверить доступ"):
+            with st.spinner("Проверка доступа к документу..."):
+                ok, msg, df_prev = gs_check_access(gs_url)
+            if ok:
+                st.success(msg)
+                if df_prev is not None and not df_prev.empty:
+                    st.caption("Превью первых 10 строк")
+                    st.dataframe(_arrow_safe(df_prev.head(10)), width="stretch")
+            else:
+                st.error(msg)
+    with cols_gs[2]:
+        st.caption("Импорт полностью заменит содержимое таблицы punta_google")
+ 
+
+with st.expander("Параметры импорта", expanded=False):
+    if report_id != "punta_google":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            delim_label = st.selectbox(
+                "Разделитель (CSV)",
+                options=["Авто", "Запятая ,", "Точка с запятой ;", "Табуляция \t"],
+                index=0,
+            )
+        with col2:
+            encoding = st.selectbox("Кодировка", options=["utf-8", "cp1251", "auto"], index=0)
+        with col3:
+            header_row = st.number_input("Строка заголовков", min_value=1, value=spec.header_row + 1)
+
+        clear_table = st.checkbox(
+            "Очищать таблицу перед загрузкой",
+            value=True,
+            help="Рекомендуется для отчётов, которые представляют полное состояние (например, список товаров)",
+        )
+        if report_id == "punta_barcodes":
+            st.caption("Для Punta очистка применяется только к выбранной коллекции.")
+    else:
+        st.caption("Для Punta Google данные читаются из Google Sheets; 2-я строка пропускается; импорт всегда заменяет таблицу.")
+        # Placeholders to avoid UnboundLocalError below for non-GS branches
+        delim_label = "Авто"
+        encoding = "utf-8"
+        header_row = spec.header_row + 1
+        clear_table = True
 
 def _ext_from_name(name: str) -> str:
     return Path(name).suffix.lstrip(".").lower()
@@ -123,13 +175,16 @@ MAX_SIZE = 200 * 1024 * 1024  # 200MB
 
 preview_col, import_col = st.columns([1, 1])
 
-has_files = False
-if spec.multi_file:
-    has_files = isinstance(uploaded, list) and len(uploaded) > 0
+has_input = False
+if report_id == "punta_google":
+    has_input = bool(gs_url)
 else:
-    has_files = uploaded is not None
+    if spec.multi_file:
+        has_input = isinstance(uploaded, list) and len(uploaded) > 0
+    else:
+        has_input = uploaded is not None
 
-if has_files:
+if has_input and report_id != "punta_google":
     size = getattr(uploaded, "size", None)
     if spec.multi_file:
         total_size = sum(getattr(f, "size", 0) or 0 for f in uploaded)
@@ -297,5 +352,77 @@ if has_files:
             except Exception as exc:  # noqa: BLE001
                 st.exception(exc)
 
+elif report_id == "punta_google":
+    # Поток для Punta Google (без загрузчика файлов)
+    with preview_col:
+        if st.button("Предпросмотр", type="primary", disabled=not gs_url):
+            try:
+                with st.spinner("Чтение Google Sheets как CSV..."):
+                    df_src = gs_read_csv(gs_url)
+                # Дедупликация по wb_sku (оставляем первое вхождение)
+                df_src = gs_dedup(df_src)
+
+                st.session_state["norm_df"] = df_src
+                st.session_state["norm_errors"] = []
+
+                st.subheader("Сводка")
+                m1, m2 = st.columns(2)
+                m1.metric("Всего строк", len(df_src))
+                m2.metric("Колонок", len(df_src.columns))
+
+                st.subheader("Данные (превью)")
+                st.dataframe(_arrow_safe(df_src.head(20)), width="stretch")
+
+                csv_buf = io.StringIO()
+                df_src.to_csv(csv_buf, index=False)
+                st.download_button(
+                    "Скачать CSV", data=csv_buf.getvalue().encode("utf-8"), file_name="punta_google.csv", mime="text/csv"
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.exception(exc)
+
+    with import_col:
+        if st.button("Импортировать в БД", disabled="norm_df" not in st.session_state or not gs_url):
+            try:
+                df_ready: pd.DataFrame = st.session_state.get("norm_df", pd.DataFrame())
+                if df_ready.empty:
+                    st.error("Нет данных для импорта. Сначала выполните предпросмотр.")
+                else:
+                    def _sget(key: str) -> Optional[str]:
+                        try:
+                            return st.secrets[key]  # type: ignore[index]
+                        except Exception:
+                            return None
+
+                    md_token = st.session_state.get("md_token") or _sget("md_token")
+                    md_database = st.session_state.get("md_database") or _sget("md_database")
+                    if not md_token:
+                        st.warning("MD токен не найден. Укажите его на странице Настройки.")
+
+                    with st.spinner("Загрузка в MotherDuck (полная замена)..."):
+                        msg = load_dataframe(
+                            df_ready,
+                            table=spec.table,
+                            md_token=md_token,
+                            md_database=md_database,
+                            replace=True,
+                        )
+
+                    # Создание индекса по wb_sku, если колонка присутствует
+                    try:
+                        with get_connection(md_token=md_token, md_database=md_database) as con:
+                            info = con.execute('PRAGMA table_info("punta_google")').fetch_df()
+                            cols = set(info["name"].astype(str).tolist())
+                            if "wb_sku" in cols:
+                                con.execute(
+                                    'CREATE INDEX IF NOT EXISTS idx_punta_google_wb_sku ON "punta_google" (wb_sku)'
+                                )
+                    except Exception:
+                        # Индекс необязателен; не прерываем импорт
+                        pass
+
+                    st.success(msg)
+            except Exception as exc:  # noqa: BLE001
+                st.exception(exc)
 else:
-    st.info("Загрузите файл для начала работы.")
+    st.info("Загрузите файл для начала работы или укажите ссылку на Google Sheets.")
