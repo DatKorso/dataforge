@@ -44,6 +44,44 @@ class ReportSpec:
     assembler: Optional[str] = None  # id of assembler when multi_file
 
 
+
+def _extract_primary_barcode(record: Dict[str, Any], prefer_last: bool) -> Optional[str]:
+    """Pick first or last barcode from normalized record value."""
+    raw = record.get("barcodes")
+    if not raw:
+        return None
+
+    values: List[Any]
+    if isinstance(raw, (list, tuple)):
+        values = list(raw)
+    else:
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            if isinstance(raw, str):
+                values = [part.strip() for part in raw.split(';')]
+            else:
+                return None
+        else:
+            if isinstance(decoded, list):
+                values = decoded
+            else:
+                values = [decoded]
+
+        cleaned = [str(item).strip() for item in values if str(item).strip()]
+        if not cleaned:
+            return None
+        return cleaned[-1] if prefer_last else cleaned[0]
+
+
+def _primary_barcode_first(record: Dict[str, Any]) -> Optional[str]:
+    return _extract_primary_barcode(record, prefer_last=False)
+
+
+def _primary_barcode_last(record: Dict[str, Any]) -> Optional[str]:
+    return _extract_primary_barcode(record, prefer_last=True)
+
+
 def get_registry() -> Dict[str, ReportSpec]:
     """Return the registry of supported report specs.
 
@@ -227,7 +265,7 @@ def get_registry() -> Dict[str, ReportSpec]:
         ],
         unique_fields_in_batch=["oz_vendor_code", "primary_barcode"],
         computed_fields={
-            "primary_barcode": lambda r: (json.loads(r["barcodes"])[-1] if r.get("barcodes") else None),
+            "primary_barcode": _primary_barcode_last,
             "import_date": lambda r: pd.Timestamp.utcnow(),
         },
         multi_file=True,
@@ -273,7 +311,7 @@ def get_registry() -> Dict[str, ReportSpec]:
         ],
         unique_fields_in_batch=["wb_sku", "size", "primary_barcode"],
         computed_fields={
-            "primary_barcode": lambda r: (json.loads(r["barcodes"])[0] if r.get("barcodes") else None),
+            "primary_barcode": _primary_barcode_last,
             "package_volume_cm3": lambda r: (
                 None
                 if r.get("package_height_cm") in (None, "")

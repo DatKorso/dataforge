@@ -41,12 +41,8 @@ This repository hosts a Streamlit multi‑page dashboard. Keep reusable logic in
 - This file applies repo‑wide. If nested `AGENTS.md` files exist, the deepest one overrides for its subtree.
 - Keep changes minimal and consistent; update docs/tests when behavior changes.
 
-### MCP code-index policy
-- Always use MCP code-index for file and code search within this repo.
-- On session start, set project path to repo root via `code-index__set_project_path`.
-- After programmatic file changes, checkouts, or large moves, run `code-index__refresh_index` before searching.
-- File discovery: use `code-index__find_files` with glob patterns.
-- Content search: use `code-index__search_code_advanced` for fast, scoped queries.
-- File overview: use `code-index__get_file_summary` when you need a quick outline.
-- Prefer the index over shell tools. Only fall back to shell search (`rg`, `grep`) if MCP code-index is unavailable or clearly stale.
-- Avoid reading large files via shell unless necessary; rely on the index whenever possible.
+## Session bootstrap
+- Activate the current dir as project using serena
+- If Serena tools are not visible, send message to user in chat about it
+- For large repos, index the project to speed up semantic operations
+- Prefer symbol-level tools (find_symbol, find_referencing_symbols, insert_after_symbol, replace_symbol_body) over grep-like edits

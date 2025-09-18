@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -69,6 +70,37 @@ def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
 
             out[c] = s.map(_to_str)
     return out
+
+
+def _select_barcode(raw: Any, prefer_last: bool = False) -> Optional[str]:
+    """Pick first/last non-empty barcode from JSON text or iterable."""
+    if raw in (None, ""):
+        return None
+
+    if isinstance(raw, (list, tuple)):
+        candidates = list(raw)
+    else:
+        candidates: list[Any]
+        parsed: Any = None
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                parsed = None
+        if isinstance(parsed, list):
+            candidates = parsed
+        elif parsed not in (None, ""):
+            candidates = [parsed]
+        elif isinstance(raw, str):
+            candidates = [part.strip() for part in raw.split(";")]
+        else:
+            return None
+
+    cleaned = [str(item).strip() for item in candidates if str(item).strip()]
+    if not cleaned:
+        return None
+    return cleaned[-1] if prefer_last else cleaned[0]
+
 
 # Дополнительные параметры для отдельных отчётов
 punta_collection: Optional[str] = None
@@ -247,6 +279,11 @@ if has_input and report_id != "punta_google":
                 allowed_brands = parse_brand_list(brand_raw)
 
                 df_norm = vr.df_normalized
+                if spec.id == "wb_products" and "barcodes" in df_norm.columns:
+                    df_norm = df_norm.copy()
+                    df_norm["primary_barcode"] = df_norm["barcodes"].map(
+                        lambda v: _select_barcode(v, prefer_last=True)
+                    )
                 df_filtered = (
                     filter_df_by_brands(df_norm, allowed_brands)
                     if ("brand" in df_norm.columns and allowed_brands)

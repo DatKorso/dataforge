@@ -27,6 +27,12 @@ def _sget(key: str) -> Optional[str]:
 md_token = st.session_state.get("md_token") or _sget("md_token")
 md_database = st.session_state.get("md_database") or _sget("md_database")
 
+if "mp_filter_no_defect" not in st.session_state:
+    st.session_state["mp_filter_no_defect"] = True
+
+if "mp_filter_unique_sizes" not in st.session_state:
+    st.session_state["mp_filter_unique_sizes"] = True
+
 if not md_token:
     st.warning("MD токен не найден. Укажите его на странице Настройки.")
 
@@ -79,7 +85,8 @@ ALL_COLUMNS = [
 with st.form(key="mp_match_form"):
     col1, col2 = st.columns([1, 1])
     with col1:
-        input_type = st.selectbox(
+        # Используем ключ для надёжной синхронизации состояния формы
+        mp_input_option = st.selectbox(
             "Тип входных данных",
             options=[
                 ("Артикул Ozon (oz_sku)", "oz_sku"),
@@ -88,17 +95,19 @@ with st.form(key="mp_match_form"):
                 ("Артикул поставщика Ozon (oz_vendor_code)", "oz_vendor_code"),
             ],
             format_func=lambda x: x[0],
-        )[1]
+            key="mp_input_option",
+        )
 
     with col2:
-        limit_per_input = st.number_input(
+        st.number_input(
             "Лимит кандидатов (0 — без лимита)",
             min_value=0,
             max_value=10000,
             value=int(st.session_state.get("limit_per_input", 0)),
+            key="limit_per_input",
         )
 
-    text_value = st.text_area(
+    st.text_area(
         "Значения для поиска",
         value=st.session_state.get("mp_input_text", ""),
         height=140,
@@ -106,23 +115,40 @@ with st.form(key="mp_match_form"):
             "Вставьте список значений через пробел или с новой строки. "
             "Поддерживаются 10–300+ значений."
         ),
+        key="mp_input_text",
     )
 
-    selected_cols = st.multiselect(
+    st.checkbox(
+        "Без брака Озон",
+        key="mp_filter_no_defect",
+        help="Исключить артикулы Ozon, начинающиеся на «БракSH».",
+    )
+
+    st.checkbox(
+        "Без дублей размеров",
+        key="mp_filter_unique_sizes",
+        help=(
+            "Оставлять по одному значению размера с наивысшим match_score "
+            "в пределах выбранного идентификатора (wb_sku или oz_sku)."
+        ),
+    )
+
+    st.multiselect(
         "Поля для вывода",
         options=ALL_COLUMNS,
         default=st.session_state.get("mp_selected_cols", DEFAULT_COLUMNS),
         help="Можно менять набор колонок без повторного поиска.",
+        key="mp_selected_cols",
     )
 
     submitted = st.form_submit_button("Найти", type="primary")
 
-    # Сохраняем состояние инпутов
-    st.session_state["mp_input_text"] = text_value
-    st.session_state["mp_selected_cols"] = selected_cols
-    st.session_state["limit_per_input"] = int(limit_per_input)
-
 if submitted:
+    # Читаем значения из session_state после submit — иначе берётся предыдущее состояние
+    input_type = st.session_state.get("mp_input_option", (None, ""))[1]
+    text_value = st.session_state.get("mp_input_text", "")
+    limit_per_input = int(st.session_state.get("limit_per_input", 0))
+
     values = parse_input(text_value)
     if not values:
         st.warning("Введите хотя бы одно значение для поиска.")
@@ -142,12 +168,65 @@ if submitted:
                 md_token=md_token,
                 md_database=md_database,
             )
+        filter_no_defect = st.session_state.get("mp_filter_no_defect", True)
+        if filter_no_defect and "oz_vendor_code" in df_res.columns:
+            starts_with_brak = (
+                df_res["oz_vendor_code"].fillna("").astype(str).str.startswith("БракSH")
+            )
+            df_res = df_res.loc[~starts_with_brak]
         st.session_state["mp_match_result"] = df_res
+        # Запоминаем, с каким типом инпута выполнялся поиск — для последующей дедупликации
+        st.session_state["mp_input_type"] = input_type
     except Exception as exc:  # noqa: BLE001
         st.exception(exc)
 
 
+def _dedupe_sizes(df: pd.DataFrame, input_type: str) -> pd.DataFrame:
+    """Remove duplicate sizes keeping the highest match_score per size group.
+
+    Rules:
+    - If input_type is 'wb_sku': keep unique wb_size within each wb_sku
+    - If input_type is 'oz_sku' or 'oz_vendor_code': keep unique oz_russian_size within each oz_sku
+    - Otherwise (e.g., barcode), leave as is
+    """
+    if df.empty:
+        return df
+
+    if input_type == "wb_sku":
+        size_col = "wb_size"
+        group_cols = ["wb_sku", size_col]
+    elif input_type in ("oz_sku", "oz_vendor_code"):
+        size_col = "oz_russian_size"
+        group_cols = ["oz_sku", size_col]
+    else:
+        return df
+
+    if "match_score" not in df.columns or any(col not in df.columns for col in group_cols):
+        return df
+
+    # Work only with rows where size is non-empty/non-null; keep others intact
+    mask_known_size = df[size_col].notna() & (df[size_col].astype(str).str.strip() != "")
+    df_known = df.loc[mask_known_size].copy()
+    df_unknown = df.loc[~mask_known_size].copy()
+
+    if df_known.empty:
+        return df
+
+    # Sort to keep the highest score first; tie-breakers stay stable
+    df_known = df_known.sort_values(["match_score"], ascending=[False])
+    df_known = df_known.drop_duplicates(subset=group_cols, keep="first")
+
+    # Preserve original order as much as possible: place known first by score, then unknown
+    out = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
+    return out
+
+
 df_show: pd.DataFrame = st.session_state.get("mp_match_result", pd.DataFrame())
+
+# Опционально фильтруем дубли размеров по текущему режиму поиска
+if not df_show.empty and st.session_state.get("mp_filter_unique_sizes", True):
+    current_input_type = st.session_state.get("mp_input_type", "")
+    df_show = _dedupe_sizes(df_show, input_type=current_input_type)
 
 if df_show.empty:
     st.info("Результаты будут показаны здесь после нажатия кнопки ‘Найти’.")
