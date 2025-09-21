@@ -1,0 +1,15 @@
+{
+  "include": ["app.py", "dataforge", "pages", "tests"],
+  "exclude": [
+    "**/.venv",
+    "**/.git",
+    "**/__pycache__",
+    ".streamlit",
+    "build",
+    "dist"
+  ],
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true,
+  "venvPath": ".",
+  "venv": ".venv"
+}

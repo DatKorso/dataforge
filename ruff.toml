@@ -1,0 +1,18 @@
+line-length = 300
+respect-gitignore = true
+src = ["dataforge", "pages", "tests"]
+extend-exclude = [
+  ".streamlit",
+]
+
+[lint]
+extend-select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "B",   # flake8-bugbear
+  "I",   # isort (import sorting)
+  "UP",  # pyupgrade
+  "SIM", # flake8-simplify
+  "C4",  # flake8-comprehensions
+  "RET", # flake8-return
+]

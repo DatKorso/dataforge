@@ -3,30 +3,32 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import streamlit as st
-
-from dataforge.ui import setup_page
-from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
-from dataforge.imports.google_sheets import (
-    check_access as gs_check_access,
-    read_csv_first_sheet as gs_read_csv,
-    dedup_by_wb_sku_first as gs_dedup,
-)
-from dataforge.secrets import save_secrets
 from dataforge.db import get_connection
 from dataforge.imports.assemblers import (
     assemble_ozon_products_full,
-    assemble_wb_products,
     assemble_wb_prices,
+    assemble_wb_products,
 )
+from dataforge.imports.google_sheets import (
+    check_access as gs_check_access,
+)
+from dataforge.imports.google_sheets import (
+    dedup_by_wb_sku_first as gs_dedup,
+)
+from dataforge.imports.google_sheets import (
+    read_csv_first_sheet as gs_read_csv,
+)
+from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
-from dataforge.utils import parse_brand_list, filter_df_by_brands
-
+from dataforge.secrets import save_secrets
+from dataforge.ui import setup_page
+from dataforge.utils import filter_df_by_brands, parse_brand_list
 
 setup_page(title="DataForge", icon="🛠️")
 st.title("📥 Импорт файлов")
@@ -72,7 +74,7 @@ def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _select_barcode(raw: Any, prefer_last: bool = False) -> Optional[str]:
+def _select_barcode(raw: Any, prefer_last: bool = False) -> str | None:
     """Pick first/last non-empty barcode from JSON text or iterable."""
     if raw in (None, ""):
         return None
@@ -103,7 +105,7 @@ def _select_barcode(raw: Any, prefer_last: bool = False) -> Optional[str]:
 
 
 # Дополнительные параметры для отдельных отчётов
-punta_collection: Optional[str] = None
+punta_collection: str | None = None
 if report_id == "punta_barcodes":
     punta_collection = st.text_input(
         "Коллекция",
@@ -113,7 +115,7 @@ if report_id == "punta_barcodes":
     st.session_state["punta_collection"] = punta_collection
 
 uploaded = None
-gs_url: Optional[str] = None
+gs_url: str | None = None
 if report_id != "punta_google":
     uploaded = st.file_uploader(
         "Загрузите файл(ы) отчёта",
@@ -125,7 +127,7 @@ if report_id != "punta_google":
     )
 else:
     # Один источник Google Sheets — ссылка сохраняется в secrets.toml
-    def _sget_secret(key: str) -> Optional[str]:
+    def _sget_secret(key: str) -> str | None:
         try:
             return st.secrets[key]  # type: ignore[index]
         except Exception:
@@ -156,7 +158,7 @@ else:
                 st.error(msg)
     with cols_gs[2]:
         st.caption("Импорт полностью заменит содержимое таблицы punta_google")
- 
+
 
 with st.expander("Параметры импорта", expanded=False):
     if report_id != "punta_google":
@@ -191,7 +193,7 @@ def _ext_from_name(name: str) -> str:
     return Path(name).suffix.lstrip(".").lower()
 
 
-def _delimiter_value(label: str) -> Optional[str]:
+def _delimiter_value(label: str) -> str | None:
     if label.startswith("Авто"):
         return None
     if "," in label:
@@ -269,7 +271,7 @@ if has_input and report_id != "punta_google":
                     vr: ValidationResult = normalize_and_validate(df_src, spec)
 
                 # Apply brand filter (if configured and applicable)
-                def _sget(key: str) -> Optional[str]:
+                def _sget(key: str) -> str | None:
                     try:
                         return st.secrets[key]  # type: ignore[index]
                     except Exception:
@@ -345,7 +347,7 @@ if has_input and report_id != "punta_google":
                 if df_ready.empty:
                     st.error("Нет валидных данных для импорта. Сначала выполните предпросмотр.")
                 else:
-                    def _sget(key: str) -> Optional[str]:
+                    def _sget(key: str) -> str | None:
                         try:
                             return st.secrets[key]  # type: ignore[index]
                         except Exception:
@@ -425,7 +427,7 @@ elif report_id == "punta_google":
                 if df_ready.empty:
                     st.error("Нет данных для импорта. Сначала выполните предпросмотр.")
                 else:
-                    def _sget(key: str) -> Optional[str]:
+                    def _sget(key: str) -> str | None:
                         try:
                             return st.secrets[key]  # type: ignore[index]
                         except Exception:
