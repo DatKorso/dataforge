@@ -7,6 +7,11 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from dataforge.collections import (
+    ensure_punta_collection,
+    get_punta_priority,
+    list_punta_collections,
+)
 from dataforge.db import get_connection
 from dataforge.imports.assemblers import (
     assemble_ozon_products_full,
@@ -23,17 +28,12 @@ from dataforge.imports.google_sheets import (
     read_csv_first_sheet as gs_read_csv,
 )
 from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
-from dataforge.schema import rebuild_punta_products_codes
-from dataforge.collections import (
-    list_punta_collections,
-    ensure_punta_collection,
-    get_punta_priority,
-)
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
+from dataforge.schema import rebuild_punta_products_codes
 from dataforge.secrets import save_secrets
-from dataforge.ui import setup_page, guard_page
+from dataforge.ui import guard_page, setup_page
 from dataforge.utils import filter_df_by_brands, parse_brand_list
 
 setup_page(title="DataForge", icon="🛠️")

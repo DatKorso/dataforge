@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
 
 import pandas as pd
-
 
 _RE_SPREADSHEET_ID = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 
@@ -26,7 +24,7 @@ def to_export_csv_url(url: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
 
 
-def read_csv_first_sheet(url: str, *, nrows: Optional[int] = None) -> pd.DataFrame:
+def read_csv_first_sheet(url: str, *, nrows: int | None = None) -> pd.DataFrame:
     """Read first sheet of a Google Sheet as CSV into a DataFrame of strings.
 
     - Skips the 2nd row (decorators) via skiprows=[1]
@@ -43,7 +41,7 @@ def read_csv_first_sheet(url: str, *, nrows: Optional[int] = None) -> pd.DataFra
         return df.applymap(lambda x: None if pd.isna(x) else str(x))
 
 
-def check_access(url: str) -> Tuple[bool, str, Optional[pd.DataFrame]]:
+def check_access(url: str) -> tuple[bool, str, pd.DataFrame | None]:
     """Try reading a few rows to validate access and format.
 
     Returns (ok, message, df_preview)

@@ -1,6 +1,7 @@
+from contextlib import contextmanager
+
 import duckdb
 import pytest
-from contextlib import contextmanager
 
 
 @pytest.fixture()
@@ -17,7 +18,7 @@ def mem_con():
 
 @pytest.fixture(autouse=True)
 def patch_db(monkeypatch, mem_con):
-    from dataforge import schema, collections
+    from dataforge import collections, schema
 
     @contextmanager
     def fake_get_connection(md_token=None, md_database=None):
@@ -30,7 +31,7 @@ def patch_db(monkeypatch, mem_con):
 
 
 def test_list_empty_and_next_priority(mem_con):
-    from dataforge.collections import list_punta_collections, get_next_punta_priority
+    from dataforge.collections import get_next_punta_priority, list_punta_collections
     from dataforge.schema import init_schema
 
     # Ensure schema initializes punta_collections
@@ -70,10 +71,10 @@ def test_ensure_and_get_priority(mem_con):
 def test_upsert_and_reorder(mem_con):
     from dataforge.collections import (
         ensure_punta_collection,
-        upsert_punta_priority,
-        reorder_punta_collections,
-        list_punta_collections,
         get_punta_priority,
+        list_punta_collections,
+        reorder_punta_collections,
+        upsert_punta_priority,
     )
 
     ensure_punta_collection("C1")

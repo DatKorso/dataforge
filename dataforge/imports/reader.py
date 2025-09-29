@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import csv
 from io import BytesIO, StringIO
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 
 
-def sniff_delimiter(sample: str) -> Optional[str]:
+def sniff_delimiter(sample: str) -> str | None:
     """Try to detect CSV delimiter from a text sample.
 
     Returns one of ",", ";", "\t" or None if unknown.
@@ -19,7 +19,7 @@ def sniff_delimiter(sample: str) -> Optional[str]:
         return None
 
 
-def ensure_text(buffer: bytes, encoding: str | None) -> Tuple[str, str]:
+def ensure_text(buffer: bytes, encoding: str | None) -> tuple[str, str]:
     """Decode bytes to text using the provided encoding or fallbacks.
 
     Returns the decoded text and the encoding used.
@@ -39,8 +39,8 @@ def read_any(
     uploaded_file: Any,
     ext: str,
     *,
-    delimiter: Optional[str] = None,
-    encoding: Optional[str] = None,
+    delimiter: str | None = None,
+    encoding: str | None = None,
     header_row: int = 0,
 ) -> pd.DataFrame:
     """Read an uploaded CSV/XLSX file into a DataFrame.

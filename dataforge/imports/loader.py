@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import pandas as pd
-
 from dataforge.db import get_connection
 from dataforge.schema import get_all_schemas, init_schema, rebuild_indexes
 
@@ -18,8 +15,8 @@ def load_dataframe(
     df: pd.DataFrame,
     table: str,
     *,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
     replace: bool = True,
 ) -> str:
     """Load a DataFrame into MotherDuck via DuckDB.
@@ -73,21 +70,20 @@ def load_dataframe(
                 return (
                     f"Recreated table {table} from schema and loaded {len(df)} rows; indexes rebuilt"
                 )
-            else:
-                # Column set matches; preserve table types
-                target_cols = [str(x) for x in info["name"].tolist()]
-                for c in target_cols:
-                    if c not in df.columns:
-                        df[c] = None
-                con.unregister("df_to_load")
-                con.register("df_to_load", df[target_cols])
-                con.execute(f"DELETE FROM {quote_ident(table)}")
-                cols = ", ".join(quote_ident(c) for c in target_cols)
-                con.execute(
-                    f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load"
-                )
-                rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
-                return f"Replaced table {table} with {len(df)} rows and rebuilt indexes"
+            # Column set matches; preserve table types
+            target_cols = [str(x) for x in info["name"].tolist()]
+            for c in target_cols:
+                if c not in df.columns:
+                    df[c] = None
+            con.unregister("df_to_load")
+            con.register("df_to_load", df[target_cols])
+            con.execute(f"DELETE FROM {quote_ident(table)}")
+            cols = ", ".join(quote_ident(c) for c in target_cols)
+            con.execute(
+                f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load"
+            )
+            rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+            return f"Replaced table {table} with {len(df)} rows and rebuilt indexes"
 
         if replace:
             # Fallback: replace table via CTAS
@@ -109,8 +105,8 @@ def load_dataframe_partitioned(
     *,
     partition_field: str,
     partition_value: str,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> str:
     """Load a DataFrame by replacing a single partition identified by a field/value.
 

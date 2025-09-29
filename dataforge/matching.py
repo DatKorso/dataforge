@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, TypedDict
+from collections.abc import Iterable
+from typing import TypedDict
 
-import pandas as pd
 import duckdb
-
+import pandas as pd
 from dataforge.db import get_connection
 
 
 class Match(TypedDict):
-    oz_sku: Optional[str]
-    wb_sku: Optional[str]
+    oz_sku: str | None
+    wb_sku: str | None
     barcode_hit: str
     matched_by: str  # 'primary↔primary' | 'primary↔any' | 'any↔primary' | 'any↔any'
     match_score: int
-    confidence_note: Optional[str]
+    confidence_note: str | None
 
 
-def _normalize_barcodes(barcodes: Iterable[str]) -> List[str]:
+def _normalize_barcodes(barcodes: Iterable[str]) -> list[str]:
     """Strip and drop empty values; keep as strings.
 
     Parameters
@@ -26,7 +26,7 @@ def _normalize_barcodes(barcodes: Iterable[str]) -> List[str]:
     Returns
     - list of cleaned strings
     """
-    out: List[str] = []
+    out: list[str] = []
     for b in barcodes:
         if b is None:
             continue
@@ -37,10 +37,10 @@ def _normalize_barcodes(barcodes: Iterable[str]) -> List[str]:
 
 
 def _ensure_connection(
-    con: Optional[duckdb.DuckDBPyConnection],
+    con: duckdb.DuckDBPyConnection | None,
     *,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> duckdb.DuckDBPyConnection:
     return con or get_connection(md_token=md_token, md_database=md_database)
 
@@ -56,12 +56,12 @@ def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
 
 
 def _matches_for_oz_skus(
-    oz_skus: List[str],
-    limit_per_input: Optional[int] = None,
+    oz_skus: list[str],
+    limit_per_input: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> pd.DataFrame:
     """Найти WB соответствия для набора OZ SKU. Возвращает детализированный DataFrame.
 
@@ -245,12 +245,12 @@ def _matches_for_oz_skus(
 
 
 def _matches_for_wb_skus(
-    wb_skus: List[str],
-    limit_per_input: Optional[int] = None,
+    wb_skus: list[str],
+    limit_per_input: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> pd.DataFrame:
     if not wb_skus:
         return pd.DataFrame()
@@ -412,12 +412,12 @@ def _matches_for_wb_skus(
 
 
 def _matches_for_barcodes(
-    barcodes: List[str],
-    limit_per_barcode: Optional[int] = None,
+    barcodes: list[str],
+    limit_per_barcode: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> pd.DataFrame:
     if not barcodes:
         return pd.DataFrame()
@@ -575,17 +575,17 @@ def _matches_for_barcodes(
 
 def find_wb_by_oz(
     oz_sku: str,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
-) -> List[Match]:
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
+) -> list[Match]:
     """Возвращает кандидатов WB для заданного OZ SKU, отсортированных по score."""
     if not oz_sku:
         raise ValueError("oz_sku is empty")
     df = _matches_for_oz_skus([str(oz_sku)], limit_per_input=limit, con=con, md_token=md_token, md_database=md_database)
-    out: List[Match] = []
+    out: list[Match] = []
     for _, r in df.iterrows():
         out.append(
             Match(
@@ -602,17 +602,17 @@ def find_wb_by_oz(
 
 def find_oz_by_wb(
     wb_sku: str,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
-) -> List[Match]:
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
+) -> list[Match]:
     """Возвращает кандидатов OZ для заданного WB SKU, отсортированных по score."""
     if not wb_sku:
         raise ValueError("wb_sku is empty")
     df = _matches_for_wb_skus([str(wb_sku)], limit_per_input=limit, con=con, md_token=md_token, md_database=md_database)
-    out: List[Match] = []
+    out: list[Match] = []
     for _, r in df.iterrows():
         out.append(
             Match(
@@ -629,18 +629,18 @@ def find_oz_by_wb(
 
 def find_by_barcodes(
     barcodes: Iterable[str],
-    limit: Optional[int] = None,
+    limit: int | None = None,
     *,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
-) -> List[Match]:
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
+) -> list[Match]:
     """Универсальный поиск по набору штрихкодов (любой стороны)."""
     barcodes_norm = _normalize_barcodes(barcodes)
     if not barcodes_norm:
         raise ValueError("barcodes are empty")
     df = _matches_for_barcodes(barcodes_norm, limit_per_barcode=limit, con=con, md_token=md_token, md_database=md_database)
-    out: List[Match] = []
+    out: list[Match] = []
     for _, r in df.iterrows():
         out.append(
             Match(
@@ -660,10 +660,10 @@ def search_matches(
     inputs: Iterable[str],
     *,
     input_type: str,  # 'oz_sku' | 'wb_sku' | 'barcode' | 'oz_vendor_code'
-    limit_per_input: Optional[int] = None,
-    con: Optional[duckdb.DuckDBPyConnection] = None,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
+    limit_per_input: int | None = None,
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
 ) -> pd.DataFrame:
     """Батч-поиск соответствий. Возвращает DataFrame с деталями по обеим сторонам.
 
@@ -695,7 +695,7 @@ def search_matches(
             WHERE p.oz_sku IS NOT NULL
             """
         ).fetch_df()
-        ozs: List[str] = df_map["oz_sku"].astype(str).tolist()
+        ozs: list[str] = df_map["oz_sku"].astype(str).tolist()
         return _matches_for_oz_skus(ozs, limit_per_input=limit_per_input, con=con, md_token=md_token, md_database=md_database)
 
     raise ValueError(f"Unknown input_type: {input_type}")

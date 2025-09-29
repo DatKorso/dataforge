@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import duckdb
-
-from dataforge.matching import find_oz_by_wb, find_wb_by_oz, find_by_barcodes, search_matches
+from dataforge.matching import find_by_barcodes, find_oz_by_wb, find_wb_by_oz, search_matches
 
 
 def _prepare_conn() -> duckdb.DuckDBPyConnection:

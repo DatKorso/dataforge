@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 import pandas as pd
 
 from .db import get_connection
@@ -9,7 +7,7 @@ from .schema import init_schema
 
 
 def list_punta_collections(
-    *, md_token: Optional[str] = None, md_database: Optional[str] = None
+    *, md_token: str | None = None, md_database: str | None = None
 ) -> pd.DataFrame:
     """Return all Punta collections sorted by priority.
 
@@ -28,8 +26,8 @@ def list_punta_collections(
 
 
 def get_punta_priority(
-    collection: str, *, md_token: Optional[str] = None, md_database: Optional[str] = None
-) -> Optional[int]:
+    collection: str, *, md_token: str | None = None, md_database: str | None = None
+) -> int | None:
     """Get priority for a given collection, or None if missing."""
     with get_connection(md_token=md_token, md_database=md_database) as con:
         init_schema(md_token=md_token, md_database=md_database)
@@ -40,7 +38,7 @@ def get_punta_priority(
 
 
 def get_next_punta_priority(
-    *, md_token: Optional[str] = None, md_database: Optional[str] = None
+    *, md_token: str | None = None, md_database: str | None = None
 ) -> int:
     """Return COALESCE(MAX(priority), 0) + 1."""
     with get_connection(md_token=md_token, md_database=md_database) as con:
@@ -50,8 +48,8 @@ def get_next_punta_priority(
 
 
 def ensure_punta_collection(
-    collection: str, *, md_token: Optional[str] = None, md_database: Optional[str] = None
-) -> Tuple[str, int]:
+    collection: str, *, md_token: str | None = None, md_database: str | None = None
+) -> tuple[str, int]:
     """Ensure a collection exists; create with next priority if missing.
 
     Returns (collection, priority).
@@ -83,7 +81,7 @@ def ensure_punta_collection(
 
 
 def upsert_punta_priority(
-    collection: str, priority: int, *, md_token: Optional[str] = None, md_database: Optional[str] = None
+    collection: str, priority: int, *, md_token: str | None = None, md_database: str | None = None
 ) -> None:
     """Insert or update priority for a collection.
 
@@ -120,7 +118,7 @@ def upsert_punta_priority(
 
 
 def reorder_punta_collections(
-    order: List[str], *, md_token: Optional[str] = None, md_database: Optional[str] = None
+    order: list[str], *, md_token: str | None = None, md_database: str | None = None
 ) -> None:
     """Persist a new order: assign priorities 1..n in the given sequence.
 
@@ -135,7 +133,7 @@ def reorder_punta_collections(
 
         # Compose full order
         seen = set()
-        full: List[str] = []
+        full: list[str] = []
         for c in order:
             c = str(c)
             if c and c not in seen:

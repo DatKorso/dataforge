@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 import pandas as pd
 import streamlit as st
-
-from dataforge.ui import setup_page
 from dataforge.db import get_connection
 from dataforge.imports.loader import quote_ident
-
+from dataforge.ui import setup_page
 
 setup_page(title="DataForge", icon="🛠️")
 st.title("🗂️ Просмотр таблиц БД")
 st.caption("Выберите таблицу MotherDuck, выполните поиск и просматривайте данные постранично.")
 
 
-def _sget(key: str) -> Optional[str]:
+def _sget(key: str) -> str | None:
     try:
         return st.secrets[key]  # type: ignore[index]
     except Exception:
@@ -30,7 +26,7 @@ if not md_token:
 
 
 @st.cache_data(ttl=30)
-def list_tables(md_token: Optional[str], md_database: Optional[str]) -> pd.DataFrame:
+def list_tables(md_token: str | None, md_database: str | None) -> pd.DataFrame:
     with get_connection(md_token=md_token, md_database=md_database) as con:
         df = con.execute(
             """
@@ -47,7 +43,7 @@ def list_tables(md_token: Optional[str], md_database: Optional[str]) -> pd.DataF
 
 @st.cache_data(ttl=30)
 def list_columns(
-    schema: Optional[str], table: str, *, md_token: Optional[str], md_database: Optional[str]
+    schema: str | None, table: str, *, md_token: str | None, md_database: str | None
 ) -> pd.DataFrame:
     with get_connection(md_token=md_token, md_database=md_database) as con:
         if schema:
@@ -75,11 +71,11 @@ def list_columns(
     return df
 
 
-def qualified_name(schema: Optional[str], table: str) -> str:
+def qualified_name(schema: str | None, table: str) -> str:
     return f"{quote_ident(schema)}.{quote_ident(table)}" if schema else quote_ident(table)
 
 
-def build_search_clause(cols: List[str]) -> Tuple[str, List[str]]:
+def build_search_clause(cols: list[str]) -> tuple[str, list[str]]:
     """Build an ILIKE search across provided columns.
 
     Returns (sql_fragment, params) where fragment like '(CAST(col AS VARCHAR) ILIKE ? OR ...)'.
@@ -136,13 +132,13 @@ with cols_ctrl[2]:
 
 # Fetch columns for search
 cols_df = list_columns(schema, table, md_token=md_token, md_database=md_database)
-all_cols: List[str] = cols_df["column_name"].astype(str).tolist()
+all_cols: list[str] = cols_df["column_name"].astype(str).tolist()
 
 search = query_text.strip()
 pattern = f"%{escape_like(search)}%" if search else None
 
 where_sql = ""
-params: List[str] = []
+params: list[str] = []
 if search:
     where_frag, _ = build_search_clause(all_cols)
     where_sql = f"WHERE {where_frag}"

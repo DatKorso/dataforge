@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Sequence, Set
+from collections.abc import Sequence
 
 import pandas as pd
 
@@ -19,7 +19,7 @@ def load_csv(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def parse_brand_list(raw: str | None) -> List[str]:
+def parse_brand_list(raw: str | None) -> list[str]:
     """Parse semicolon-separated brand list into a normalized, unique list.
 
     - Splits on ';' (also treats newlines as separators)
@@ -31,8 +31,8 @@ def parse_brand_list(raw: str | None) -> List[str]:
         return []
     # Support both ';' and newlines as separators
     text = raw.replace("\n", ";")
-    seen: Set[str] = set()
-    out: List[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for part in text.split(';'):
         b = brand_title(part)
         if not b:

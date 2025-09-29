@@ -1,11 +1,13 @@
 from __future__ import annotations
-import re
-import pandas as pd
-from typing import Any, Optional
+
 import json
+import re
+from typing import Any
+
+import pandas as pd
 
 
-def _to_str(v: Any) -> Optional[str]:
+def _to_str(v: Any) -> str | None:
     if v is None:
         return None
     s = str(v)
@@ -13,7 +15,7 @@ def _to_str(v: Any) -> Optional[str]:
     return s if s != "" else None
 
 
-def string_clean(v: Any) -> Optional[str]:
+def string_clean(v: Any) -> str | None:
     """Trim whitespace; return None for empty strings; drop leading apostrophes.
     Also remove zero-width characters and normalize spaces.
     """
@@ -26,7 +28,7 @@ def string_clean(v: Any) -> Optional[str]:
     return s if s else None
 
 
-def brand_title(v: Any) -> Optional[str]:
+def brand_title(v: Any) -> str | None:
     """Normalize brand names to Title Case if present."""
     s = string_clean(v)
     if s is None:
@@ -34,14 +36,14 @@ def brand_title(v: Any) -> Optional[str]:
     return s.title()
 
 
-def title_clean(v: Any) -> Optional[str]:
+def title_clean(v: Any) -> str | None:
     s = string_clean(v)
     if s is None:
         return None
     return s.title()
 
 
-def upper3(v: Any) -> Optional[str]:
+def upper3(v: Any) -> str | None:
     """Return uppercased string (trimmed), up to 3 chars if longer."""
     s = string_clean(v)
     if s is None:
@@ -49,7 +51,7 @@ def upper3(v: Any) -> Optional[str]:
     return s.upper()[:3]
 
 
-def int_strict(v: Any) -> Optional[int]:
+def int_strict(v: Any) -> int | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -61,7 +63,7 @@ def int_strict(v: Any) -> Optional[int]:
         raise ValueError(f"invalid int: {s}") from exc
 
 
-def int_relaxed(v: Any) -> Optional[int]:
+def int_relaxed(v: Any) -> int | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -75,7 +77,7 @@ def int_relaxed(v: Any) -> Optional[int]:
         raise ValueError(f"invalid int: {s}") from exc
 
 
-def price(v: Any) -> Optional[float]:
+def price(v: Any) -> float | None:
     """Clean currency strings, return rounded float to 2 decimals, allow None.
     Removes currency symbols and spaces.
     """
@@ -95,7 +97,7 @@ def price(v: Any) -> Optional[float]:
     return round(val)
 
 
-def money2(v: Any) -> Optional[float]:
+def money2(v: Any) -> float | None:
     """Parse money with decimals; keep 2 decimal places."""
     s = string_clean(v)
     if s is None:
@@ -109,7 +111,7 @@ def money2(v: Any) -> Optional[float]:
     return round(val, 2)
 
 
-def decimal2(v: Any) -> Optional[float]:
+def decimal2(v: Any) -> float | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -120,7 +122,7 @@ def decimal2(v: Any) -> Optional[float]:
     return round(float(s), 2)
 
 
-def decimal3(v: Any) -> Optional[float]:
+def decimal3(v: Any) -> float | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -131,7 +133,7 @@ def decimal3(v: Any) -> Optional[float]:
     return round(float(s), 3)
 
 
-def percent_str(v: Any) -> Optional[float]:
+def percent_str(v: Any) -> float | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -144,17 +146,17 @@ def percent_str(v: Any) -> Optional[float]:
     return max(0.0, min(100.0, val))
 
 
-def percent_text(v: Any) -> Optional[str]:
+def percent_text(v: Any) -> str | None:
     """Normalize percent to string 0..100 with up to 2 decimals (no % sign)."""
     p = percent_str(v)
     if p is None:
         return None
     # Keep compact representation: drop trailing zeros
-    s = ("{:.2f}".format(p)).rstrip("0").rstrip(".")
+    s = (f"{p:.2f}").rstrip("0").rstrip(".")
     return s
 
 
-def percent_int(v: Any) -> Optional[int]:
+def percent_int(v: Any) -> int | None:
     """Normalize percent to integer 0..100."""
     p = percent_str(v)
     if p is None:
@@ -162,7 +164,7 @@ def percent_int(v: Any) -> Optional[int]:
     return int(round(p))
 
 
-def rating(v: Any) -> Optional[float]:
+def rating(v: Any) -> float | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -174,7 +176,7 @@ def rating(v: Any) -> Optional[float]:
     return max(0.0, min(5.0, round(val, 2)))
 
 
-def rating10(v: Any) -> Optional[float]:
+def rating10(v: Any) -> float | None:
     s = string_clean(v)
     if s is None:
         return None
@@ -186,14 +188,14 @@ def rating10(v: Any) -> Optional[float]:
     return max(0.0, min(10.0, round(val, 1)))
 
 
-def lower_clean(v: Any) -> Optional[str]:
+def lower_clean(v: Any) -> str | None:
     s = string_clean(v)
     if s is None:
         return None
     return s.lower()
 
 
-def digits_only(v: Any) -> Optional[str]:
+def digits_only(v: Any) -> str | None:
     """Keep only digits, handling numeric inputs without appending bogus trailing zeros.
 
     - If value is int -> stringify
@@ -212,7 +214,7 @@ def digits_only(v: Any) -> Optional[str]:
     return s if s else None
 
 
-def code_text(v: Any) -> Optional[str]:
+def code_text(v: Any) -> str | None:
     """Convert values that may be read as numbers into stable text codes.
 
     Behaviors:
@@ -241,7 +243,7 @@ def code_text(v: Any) -> Optional[str]:
             if v.is_integer():
                 return str(int(v))
             # Fallback: drop trailing zeros if any when stringified
-            s = ("{:.8f}".format(v)).rstrip("0").rstrip(".")
+            s = (f"{v:.8f}").rstrip("0").rstrip(".")
             return s
         if isinstance(v, int):
             return str(v)
@@ -251,7 +253,7 @@ def code_text(v: Any) -> Optional[str]:
     return string_clean(v)
 
 
-def timestamp(v: Any) -> Optional[pd.Timestamp]:
+def timestamp(v: Any) -> pd.Timestamp | None:
     """Parse typical Ozon datetime formats (dd.mm.yyyy[ HH:MM[:SS]])."""
     s = string_clean(v)
     if s is None:
@@ -263,7 +265,7 @@ def timestamp(v: Any) -> Optional[pd.Timestamp]:
         return None
 
 
-def barcodes_json(v: Any) -> Optional[str]:
+def barcodes_json(v: Any) -> str | None:
     """Split barcodes by ';' and serialize as JSON array (strings)."""
     s = string_clean(v)
     if s is None:
@@ -276,7 +278,7 @@ def barcodes_json(v: Any) -> Optional[str]:
     return json.dumps(parts, ensure_ascii=False)
 
 
-def urls_json(v: Any) -> Optional[str]:
+def urls_json(v: Any) -> str | None:
     """Split URLs by ';' and serialize as JSON array (strings)."""
     s = string_clean(v)
     if s is None:
@@ -288,7 +290,7 @@ def urls_json(v: Any) -> Optional[str]:
     return json.dumps(parts, ensure_ascii=False)
 
 
-def paragraphs_json(v: Any) -> Optional[str]:
+def paragraphs_json(v: Any) -> str | None:
     """Split cell text by paragraph (newline) boundaries and serialize to JSON array.
 
     Behavior:
@@ -309,7 +311,7 @@ def paragraphs_json(v: Any) -> Optional[str]:
 
 
 # WB-specific helpers
-def size_first2(v: Any) -> Optional[str]:
+def size_first2(v: Any) -> str | None:
     """Return the first two characters of the cleaned size string.
 
     Examples:

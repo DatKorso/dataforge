@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import duckdb
-
 from dataforge.matching import search_matches
 
 

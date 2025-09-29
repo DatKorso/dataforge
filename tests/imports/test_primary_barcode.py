@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import pandas as pd
 
+import pandas as pd
 from dataforge.imports.registry import get_registry
 from dataforge.imports.validator import normalize_and_validate
 

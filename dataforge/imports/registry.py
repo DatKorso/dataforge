@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
 import json
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
 import pandas as pd
 
 
@@ -19,7 +21,7 @@ class ColumnSpec:
     source: str
     target: str
     required: bool = False
-    transform: Optional[str] = None
+    transform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,25 +35,25 @@ class ReportSpec:
     name: str
     description: str
     table: str
-    allowed_extensions: List[str]
+    allowed_extensions: list[str]
     default_encoding: str = "utf-8"
     delimiter: str | None = None  # None -> auto-detect for CSV
     header_row: int = 0
-    columns: List[ColumnSpec] = field(default_factory=list)
-    unique_fields_in_batch: List[str] = field(default_factory=list)
-    computed_fields: Dict[str, Callable[[Dict[str, Any]], Any]] = field(default_factory=dict)
+    columns: list[ColumnSpec] = field(default_factory=list)
+    unique_fields_in_batch: list[str] = field(default_factory=list)
+    computed_fields: dict[str, Callable[[dict[str, Any]], Any]] = field(default_factory=dict)
     multi_file: bool = False
-    assembler: Optional[str] = None  # id of assembler when multi_file
+    assembler: str | None = None  # id of assembler when multi_file
 
 
 
-def _extract_primary_barcode(record: Dict[str, Any], prefer_last: bool) -> Optional[str]:
+def _extract_primary_barcode(record: dict[str, Any], prefer_last: bool) -> str | None:
     """Pick first or last barcode from normalized record value."""
     raw = record.get("barcodes")
     if not raw:
         return None
 
-    values: List[Any]
+    values: list[Any]
     if isinstance(raw, (list, tuple)):
         values = list(raw)
     else:
@@ -74,15 +76,15 @@ def _extract_primary_barcode(record: Dict[str, Any], prefer_last: bool) -> Optio
         return cleaned[-1] if prefer_last else cleaned[0]
 
 
-def _primary_barcode_first(record: Dict[str, Any]) -> Optional[str]:
+def _primary_barcode_first(record: dict[str, Any]) -> str | None:
     return _extract_primary_barcode(record, prefer_last=False)
 
 
-def _primary_barcode_last(record: Dict[str, Any]) -> Optional[str]:
+def _primary_barcode_last(record: dict[str, Any]) -> str | None:
     return _extract_primary_barcode(record, prefer_last=True)
 
 
-def get_registry() -> Dict[str, ReportSpec]:
+def get_registry() -> dict[str, ReportSpec]:
     """Return the registry of supported report specs.
 
     Currently includes: Ozon — Товары (ozon_products)

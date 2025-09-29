@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ from .transformers import TRANSFORMERS
 class ValidationResult:
     rows_total: int
     rows_valid: int
-    errors: List[Dict[str, Any]]
+    errors: list[dict[str, Any]]
     df_normalized: pd.DataFrame
 
 
@@ -31,12 +31,12 @@ def normalize_and_validate(df_raw: pd.DataFrame, spec: ReportSpec) -> Validation
     df.columns = [str(c).strip() for c in df.columns]
 
     # Build normalized rows
-    errors: List[Dict[str, Any]] = []
-    out_rows: List[Dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    out_rows: list[dict[str, Any]] = []
 
     for idx, row in df.iterrows():
-        record: Dict[str, Any] = {}
-        row_errors: List[str] = []
+        record: dict[str, Any] = {}
+        row_errors: list[str] = []
 
         # Field mapping & transforms
         for col in spec.columns:
@@ -87,14 +87,14 @@ def normalize_and_validate(df_raw: pd.DataFrame, spec: ReportSpec) -> Validation
     )
 
 
-def _detect_duplicates(df: pd.DataFrame, keys: List[str]) -> List[Dict[str, Any]]:
+def _detect_duplicates(df: pd.DataFrame, keys: list[str]) -> list[dict[str, Any]]:
     if not keys or df.empty:
         return []
     dups = df[df.duplicated(subset=keys, keep=False)]
     if dups.empty:
         return []
     # Group duplicates to produce concise messages
-    msgs: List[Dict[str, Any]] = []
+    msgs: list[dict[str, Any]] = []
     for _, grp in dups.groupby(keys):
         key_vals = {k: grp.iloc[0][k] for k in keys}
         msgs.append({"row": None, "errors": f"duplicate batch keys: {key_vals}"})

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from io import BytesIO
-from typing import Any, Iterable, List
+from typing import Any
 
 import pandas as pd
 
@@ -26,9 +27,9 @@ def assemble_ozon_products_full(files: Iterable[Any]) -> pd.DataFrame:
 
     Join key: "Артикул*"
     """
-    base_parts: List[pd.DataFrame] = []
-    video_parts: List[pd.DataFrame] = []
-    cover_parts: List[pd.DataFrame] = []
+    base_parts: list[pd.DataFrame] = []
+    video_parts: list[pd.DataFrame] = []
+    cover_parts: list[pd.DataFrame] = []
 
     base_cols_keep = [
         "Артикул*",
@@ -133,7 +134,7 @@ def assemble_wb_products(files: Iterable[Any]) -> pd.DataFrame:
     - Data starts at row 5; rows with empty 'Артикул продавца' dropped
     - Add source_file column
     """
-    parts: List[pd.DataFrame] = []
+    parts: list[pd.DataFrame] = []
     keep_cols = [
         "Группа",
         "Артикул продавца",
@@ -184,7 +185,7 @@ def assemble_wb_products(files: Iterable[Any]) -> pd.DataFrame:
 
 def assemble_wb_prices(files: Iterable[Any]) -> pd.DataFrame:
     """Read WB prices from 'Отчет - цены и скидки на товары' (first row headers)."""
-    parts: List[pd.DataFrame] = []
+    parts: list[pd.DataFrame] = []
     for f in files:
         raw = f.getvalue() if hasattr(f, "getvalue") else f.read()
         bio = BytesIO(raw)

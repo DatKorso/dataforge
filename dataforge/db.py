@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple
 
 import duckdb
 
 
-def get_connection(md_token: Optional[str] = None, md_database: Optional[str] = None) -> duckdb.DuckDBPyConnection:
+def get_connection(md_token: str | None = None, md_database: str | None = None) -> duckdb.DuckDBPyConnection:
     """Create and return a DuckDB connection to MotherDuck.
 
     Authentication is provided via the `MOTHERDUCK_TOKEN` environment variable.
@@ -26,7 +25,7 @@ def get_connection(md_token: Optional[str] = None, md_database: Optional[str] = 
     return duckdb.connect(dsn)
 
 
-def check_connection(md_token: Optional[str] = None, md_database: Optional[str] = None) -> Tuple[bool, str]:
+def check_connection(md_token: str | None = None, md_database: str | None = None) -> tuple[bool, str]:
     """Validate that a connection to MotherDuck can be established.
 
     Returns a tuple `(ok, message)` describing the result.

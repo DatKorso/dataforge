@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import io
-from typing import List, Optional
 
 import pandas as pd
 import streamlit as st
-
-from dataforge.ui import setup_page
 from dataforge.matching import search_matches
-
+from dataforge.ui import setup_page
 
 setup_page(title="DataForge", icon="🛠️")
 st.title("🔎 Поиск соответствий карточек (Ozon ↔ WB)")
@@ -17,7 +14,7 @@ st.caption(
 )
 
 
-def _sget(key: str) -> Optional[str]:
+def _sget(key: str) -> str | None:
     try:
         return st.secrets[key]  # type: ignore[index]
     except Exception:
@@ -37,7 +34,7 @@ if not md_token:
     st.warning("MD токен не найден. Укажите его на странице Настройки.")
 
 
-def parse_input(text: str) -> List[str]:
+def parse_input(text: str) -> list[str]:
     # Разбиваем по любым пробелам и переводам строки; фильтруем пустые
     tokens = [t.strip() for t in text.replace(",", " ").split()]  # запятые тоже считаем разделителем
     return [t for t in tokens if t]

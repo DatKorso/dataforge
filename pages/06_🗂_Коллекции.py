@@ -1,11 +1,9 @@
 import streamlit as st
-
 from dataforge.collections import (
-    list_punta_collections,
     ensure_punta_collection,
+    list_punta_collections,
     reorder_punta_collections,
 )
-
 
 st.title("🗂 Коллекции (Punta)")
 st.caption("Управление списком коллекций и их порядком (приоритетом).")

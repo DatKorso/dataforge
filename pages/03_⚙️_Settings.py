@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import streamlit as st
-from dataforge.ui import setup_page
-
-from dataforge.db import check_connection
-from dataforge.secrets import load_secrets, save_secrets
 import time
-from dataforge.schema import init_schema, rebuild_indexes, rebuild_punta_products_codes
-from dataforge.db import get_connection
 
+import streamlit as st
+from dataforge.db import check_connection, get_connection
+from dataforge.schema import init_schema, rebuild_indexes, rebuild_punta_products_codes
+from dataforge.secrets import load_secrets, save_secrets
+from dataforge.ui import setup_page
 
 setup_page(title="DataForge", icon="🛠️")
 st.title("⚙️ Settings")

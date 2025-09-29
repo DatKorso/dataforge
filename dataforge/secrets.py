@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import toml
-
 
 SECRETS_PATH = Path(".streamlit/secrets.toml")
 
 
-def load_secrets() -> Dict[str, Any]:
+def load_secrets() -> dict[str, Any]:
     """Load secrets from `.streamlit/secrets.toml`.
 
     Returns an empty dict if the file does not exist or is empty.
@@ -23,7 +22,7 @@ def load_secrets() -> Dict[str, Any]:
         return {}
 
 
-def save_secrets(update: Dict[str, Any]) -> None:
+def save_secrets(update: dict[str, Any]) -> None:
     """Merge and save secrets to `.streamlit/secrets.toml`.
 
     - Reads existing TOML (if present)

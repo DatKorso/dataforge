@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from dataforge.db import get_connection
 
@@ -10,7 +10,7 @@ from dataforge.db import get_connection
 class TableSchema:
     name: str
     create_sql: str
-    index_sql: List[Tuple[str, str]]  # (index_name, create_sql)
+    index_sql: list[tuple[str, str]]  # (index_name, create_sql)
 
 
 def _oz_products_schema() -> TableSchema:
@@ -50,14 +50,14 @@ def _oz_products_schema() -> TableSchema:
     ]
 
     # Fill in index name placeholders
-    index_sql: List[Tuple[str, str]] = []
+    index_sql: list[tuple[str, str]] = []
     for idx_name, tmpl in idx_defs:
         index_sql.append((idx_name, tmpl.format(idx_name)))
 
     return TableSchema(name=name, create_sql=create, index_sql=index_sql)
 
 
-def get_all_schemas() -> Dict[str, TableSchema]:
+def get_all_schemas() -> dict[str, TableSchema]:
     prod = _oz_products_schema()
 
     # Ozon orders schema (from docs/TZ_oz_orders_import.md)
@@ -96,7 +96,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_oz_product_id", f'CREATE INDEX {{}} ON "{name}" (oz_product_id)'),
             (f"idx_{name}_oz_vendor_code", f'CREATE INDEX {{}} ON "{name}" (oz_vendor_code)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -147,7 +147,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_oz_vendor_code", f'CREATE INDEX {{}} ON "{name}" (oz_vendor_code)'),
             (f"idx_{name}_primary_barcode", f'CREATE INDEX {{}} ON "{name}" (primary_barcode)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -190,7 +190,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_wb_sku", f'CREATE INDEX {{}} ON "{name}" (wb_sku)'),
             (f"idx_{name}_primary_barcode", f'CREATE INDEX {{}} ON "{name}" (primary_barcode)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -214,7 +214,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_wb_sku", f'CREATE INDEX {{}} ON "{name}" (wb_sku)'),
             (f"idx_{name}_barcode_primary", f'CREATE INDEX {{}} ON "{name}" (barcode_primary)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -242,7 +242,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_external_code", f'CREATE INDEX {{}} ON "{name}" (external_code)'),
             (f"idx_{name}_barcode", f'CREATE INDEX {{}} ON "{name}" (barcode)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -270,7 +270,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
             (f"idx_{name}_un_id", f'CREATE INDEX {{}} ON "{name}" ("un-id")'),
             (f"idx_{name}_pn_article", f'CREATE INDEX {{}} ON "{name}" (pn_article)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -290,7 +290,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
         idx_defs = [
             (f"idx_{name}_external_code", f'CREATE INDEX {{}} ON "{name}" (external_code)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -311,7 +311,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
         idx_defs = [
             (f"idx_{name}_priority", f'CREATE INDEX {{}} ON "{name}" (priority)'),
         ]
-        index_sql: List[Tuple[str, str]] = []
+        index_sql: list[tuple[str, str]] = []
         for idx_name, tmpl in idx_defs:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
@@ -331,8 +331,8 @@ def get_all_schemas() -> Dict[str, TableSchema]:
     }
 
 
-def init_schema(md_token: Optional[str] = None, md_database: Optional[str] = None) -> List[str]:
-    messages: List[str] = []
+def init_schema(md_token: str | None = None, md_database: str | None = None) -> list[str]:
+    messages: list[str] = []
     with get_connection(md_token=md_token, md_database=md_database) as con:
         for tbl in get_all_schemas().values():
             con.execute(tbl.create_sql)
@@ -351,15 +351,15 @@ def init_schema(md_token: Optional[str] = None, md_database: Optional[str] = Non
 
 def rebuild_indexes(
     *,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
-    table: Optional[str] = None,
-) -> List[str]:
+    md_token: str | None = None,
+    md_database: str | None = None,
+    table: str | None = None,
+) -> list[str]:
     """Drop and recreate indexes for given table or all.
 
     DuckDB may drop indexes on CREATE OR REPLACE TABLE; this restores them.
     """
-    messages: List[str] = []
+    messages: list[str] = []
     schemas = get_all_schemas()
     targets: Iterable[TableSchema]
     if table:
@@ -381,9 +381,9 @@ def rebuild_indexes(
 
 def rebuild_punta_products_codes(
     *,
-    md_token: Optional[str] = None,
-    md_database: Optional[str] = None,
-) -> List[str]:
+    md_token: str | None = None,
+    md_database: str | None = None,
+) -> list[str]:
     """(Re)build normalized table punta_products_codes from punta_products.
 
     - Expands JSON array external_code_list into rows and attaches the full product row.
@@ -391,7 +391,7 @@ def rebuild_punta_products_codes(
       (new columns will automatically appear in punta_products_codes).
     - Rebuilds index on external_code for performant lookups.
     """
-    messages: List[str] = []
+    messages: list[str] = []
     with get_connection(md_token=md_token, md_database=md_database) as con:
         con.execute(
             r"""

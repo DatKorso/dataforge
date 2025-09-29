@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-
-from dataforge.imports.google_sheets import to_export_csv_url, dedup_by_wb_sku_first
+from dataforge.imports.google_sheets import dedup_by_wb_sku_first, to_export_csv_url
 
 
 def test_to_export_csv_url_basic():
