@@ -5,7 +5,9 @@ from dataforge.ui import setup_page
 
 from dataforge.db import check_connection
 from dataforge.secrets import load_secrets, save_secrets
-from dataforge.schema import init_schema, rebuild_indexes
+import time
+from dataforge.schema import init_schema, rebuild_indexes, rebuild_punta_products_codes
+from dataforge.db import get_connection
 
 
 setup_page(title="DataForge", icon="🛠️")
@@ -96,3 +98,40 @@ with cols2[1]:
         st.success("Выполнено:")
         for m in msgs:
             st.write(f"• {m}")
+
+st.divider()
+st.subheader("Punta")
+st.caption("Ручное обновление нормализованной связки external_code ↔ продукты Punta.")
+
+if st.button("Обновить связку Punta"):
+    try:
+        t0 = time.perf_counter()
+        with st.spinner("Пересборка punta_products_codes..."):
+            msgs = rebuild_punta_products_codes(md_token=md_token or None, md_database=md_database or None)
+        dt = time.perf_counter() - t0
+
+        # Подсчёт размера таблицы (строк и уникальных external_code)
+        rows = codes = None
+        try:
+            with get_connection(md_token=md_token or None, md_database=md_database or None) as con:
+                stats = con.execute(
+                    "SELECT COUNT(*) AS rows, COUNT(DISTINCT external_code) AS codes FROM punta_products_codes"
+                ).fetch_df()
+                if not stats.empty:
+                    rows = int(stats.loc[0, "rows"]) if stats.loc[0, "rows"] is not None else None
+                    codes = int(stats.loc[0, "codes"]) if stats.loc[0, "codes"] is not None else None
+        except Exception:
+            pass
+
+        st.success(
+            f"Готово за {dt:.2f} c. "
+            + (f"Строк: {rows}. Уникальных external_code: {codes}." if rows is not None and codes is not None else "")
+        )
+        if rows and rows > 1_000_000:
+            st.warning("Размер таблицы >1 млн строк — проверьте нагрузку и индексы.")
+        if msgs:
+            with st.expander("Логи пересборки"):
+                for m in msgs:
+                    st.write(f"• {m}")
+    except Exception as exc:  # noqa: BLE001
+        st.exception(exc)

@@ -297,7 +297,7 @@ def get_registry() -> Dict[str, ReportSpec]:
             ColumnSpec("Пол", "gender", required=False, transform="string_clean"),
             ColumnSpec("Цвет", "color", required=False, transform="lower_clean"),
             ColumnSpec("Баркод", "barcodes", required=False, transform="barcodes_json"),
-            ColumnSpec("Размер", "size", required=False, transform="string_clean"),
+            ColumnSpec("Размер", "size", required=False, transform="size_first2"),
             ColumnSpec("Рос. размер", "russian_size", required=False, transform="string_clean"),
             ColumnSpec("Вес с упаковкой", "weight_kg", required=False, transform="decimal3"),
             ColumnSpec("Высота упаковки", "package_height_cm", required=False, transform="decimal2"),

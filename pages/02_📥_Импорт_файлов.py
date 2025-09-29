@@ -23,6 +23,7 @@ from dataforge.imports.google_sheets import (
     read_csv_first_sheet as gs_read_csv,
 )
 from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
+from dataforge.schema import rebuild_punta_products_codes
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
@@ -389,6 +390,18 @@ if has_input and report_id != "punta_google":
                                 replace=clear_table,
                             )
                     st.success(msg)
+
+                    # Авто-обновление нормализованной связки Punta после загрузки
+                    if report_id in ("punta_barcodes", "punta_products"):
+                        try:
+                            with st.spinner("Обновление связки Punta (external_code)"):
+                                msgs = rebuild_punta_products_codes(
+                                    md_token=md_token,
+                                    md_database=md_database,
+                                )
+                            st.info("; ".join(msgs))
+                        except Exception as exc:  # noqa: BLE001
+                            st.warning(f"Не удалось обновить Punta mapping: {exc}")
             except Exception as exc:  # noqa: BLE001
                 st.exception(exc)
 

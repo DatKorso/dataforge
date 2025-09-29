@@ -277,6 +277,26 @@ def get_all_schemas() -> Dict[str, TableSchema]:
 
     punta_prod = _punta_products_schema()
 
+    # Punta products codes (normalized external_code → product row)
+    def _punta_products_codes_schema() -> TableSchema:
+        name = "punta_products_codes"
+        # Minimal placeholder schema; real shape is created via CTAS in rebuild helper
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            external_code VARCHAR(50)
+        )
+        """
+
+        idx_defs = [
+            (f"idx_{name}_external_code", f'CREATE INDEX {{}} ON "{name}" (external_code)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    punta_prod_codes = _punta_products_codes_schema()
+
     return {
         prod.name: prod,
         orders.name: orders,
@@ -285,6 +305,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
         wb_prices_tbl.name: wb_prices_tbl,
         punta_bc.name: punta_bc,
         punta_prod.name: punta_prod,
+        punta_prod_codes.name: punta_prod_codes,
     }
 
 
@@ -333,4 +354,35 @@ def rebuild_indexes(
                 con.execute(f"DROP INDEX IF EXISTS {idx_name}")
                 con.execute(create_sql)
                 messages.append(f"rebuilt index {idx_name} on {ts.name}")
+    return messages
+
+
+def rebuild_punta_products_codes(
+    *,
+    md_token: Optional[str] = None,
+    md_database: Optional[str] = None,
+) -> List[str]:
+    """(Re)build normalized table punta_products_codes from punta_products.
+
+    - Expands JSON array external_code_list into rows and attaches the full product row.
+    - Uses CREATE OR REPLACE TABLE to keep the table in sync with punta_products schema
+      (new columns will automatically appear in punta_products_codes).
+    - Rebuilds index on external_code for performant lookups.
+    """
+    messages: List[str] = []
+    with get_connection(md_token=md_token, md_database=md_database) as con:
+        con.execute(
+            r"""
+            CREATE OR REPLACE TABLE punta_products_codes AS
+            SELECT
+                json_extract_string(e.value, '$') AS external_code,
+                p.*
+            FROM punta_products AS p,
+                 json_each(COALESCE(p.external_code_list, '[]')) AS e
+            """
+        )
+        messages.append("rebuilt punta_products_codes via CTAS")
+
+    # Ensure indexes exist (DuckDB can drop indexes on replace)
+    messages.extend(rebuild_indexes(md_token=md_token, md_database=md_database, table="punta_products_codes"))
     return messages

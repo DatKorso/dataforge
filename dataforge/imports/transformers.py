@@ -308,6 +308,21 @@ def paragraphs_json(v: Any) -> Optional[str]:
     return json.dumps(parts, ensure_ascii=False)
 
 
+# WB-specific helpers
+def size_first2(v: Any) -> Optional[str]:
+    """Return the first two characters of the cleaned size string.
+
+    Examples:
+    - "37→37.5ru" -> "37"
+    - "40" -> "40"
+    - None/empty -> None
+    """
+    s = string_clean(v)
+    if s is None:
+        return None
+    return s[:2]
+
+
 # Registry of transformer functions
 TRANSFORMERS = {
     "string_clean": string_clean,
@@ -332,4 +347,5 @@ TRANSFORMERS = {
     "lower_clean": lower_clean,
     "digits_only": digits_only,
     "code_text": code_text,
+    "size_first2": size_first2,
 }

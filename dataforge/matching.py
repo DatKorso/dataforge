@@ -45,6 +45,16 @@ def _ensure_connection(
     return con or get_connection(md_token=md_token, md_database=md_database)
 
 
+def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
+    """Check whether a table exists in the current DuckDB connection."""
+    try:
+        q = "SELECT 1 FROM information_schema.tables WHERE table_name = ? LIMIT 1"
+        res = con.execute(q, [table_name]).fetchone()
+        return res is not None
+    except Exception:
+        return False
+
+
 def _matches_for_oz_skus(
     oz_skus: List[str],
     limit_per_input: Optional[int] = None,
@@ -66,7 +76,32 @@ def _matches_for_oz_skus(
     df_inp = pd.DataFrame({"oz_sku": oz_skus})
     local_con.register("inputs", df_inp)
 
-    sql = r"""
+    punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
+
+    punta_cte = r"""
+    punta_map AS (
+        SELECT pb.barcode,
+               pb.external_code,
+               ppc.collection
+        FROM punta_barcodes pb
+        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
+    )
+    """ if punta_enabled else ""
+
+    punta_select = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+    """ if punta_enabled else ""
+
+    punta_joins = r"""
+        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = o.oz_primary_barcode
+        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = w.wb_primary_barcode
+    """ if punta_enabled else ""
+
+    sql_head = r"""
     WITH inp AS (
         SELECT CAST(oz_sku AS UBIGINT) AS oz_sku FROM inputs
     ),
@@ -133,7 +168,11 @@ def _matches_for_oz_skus(
                wp.primary_barcode AS wb_primary_barcode
         FROM wb_products AS wp,
              json_each(COALESCE(wp.barcodes, '[]')) AS j
-    ),
+    )
+    """
+
+    joined_sql = r"""
+    ,
     joined AS (
         SELECT o.oz_sku,
                o.oz_vendor_code,
@@ -176,6 +215,27 @@ def _matches_for_oz_skus(
     ORDER BY r.oz_sku, r.match_score DESC, r.wb_sku
     """
 
+    if punta_enabled:
+        sql_mid = ",\n    " + punta_cte + "\n"
+        joined_enrich = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+        """
+        joined_sql = joined_sql.replace(
+            "FROM oz_barcodes AS o",
+            joined_enrich + "        FROM oz_barcodes AS o",
+        )
+        joined_sql = joined_sql.replace(
+            "ON w.barcode = o.barcode",
+            "ON w.barcode = o.barcode\n          " + punta_joins,
+        )
+        sql = sql_head + sql_mid + joined_sql
+    else:
+        sql = sql_head + joined_sql
+
     if limit_per_input is None or int(limit_per_input) <= 0:
         params = [None, 0]
     else:
@@ -198,7 +258,32 @@ def _matches_for_wb_skus(
     df_inp = pd.DataFrame({"wb_sku": wb_skus})
     local_con.register("inputs", df_inp)
 
-    sql = r"""
+    punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
+
+    punta_cte = r"""
+    punta_map AS (
+        SELECT pb.barcode,
+               pb.external_code,
+               ppc.collection
+        FROM punta_barcodes pb
+        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
+    )
+    """ if punta_enabled else ""
+
+    punta_select = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+    """ if punta_enabled else ""
+
+    punta_joins = r"""
+        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = o.oz_primary_barcode
+        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = w.wb_primary_barcode
+    """ if punta_enabled else ""
+
+    sql_head = r"""
     WITH inp AS (
         SELECT CAST(wb_sku AS UBIGINT) AS wb_sku FROM inputs
     ),
@@ -251,7 +336,11 @@ def _matches_for_wb_skus(
               SELECT 1 FROM json_each(COALESCE(f.barcodes, '[]')) AS j
               WHERE json_extract_string(j.value, '$') = o.oz_barcode_primary
           )
-    ),
+    )
+    """
+
+    joined_sql = r"""
+    ,
     joined AS (
         SELECT w.wb_sku,
                o.oz_sku,
@@ -293,6 +382,27 @@ def _matches_for_wb_skus(
     ORDER BY r.wb_sku, r.match_score DESC, r.oz_sku
     """
 
+    if punta_enabled:
+        sql_mid = ",\n    " + punta_cte + "\n"
+        joined_enrich = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+        """
+        joined_sql = joined_sql.replace(
+            "FROM wb_barcodes AS w",
+            joined_enrich + "        FROM wb_barcodes AS w",
+        )
+        joined_sql = joined_sql.replace(
+            "JOIN oz_barcodes AS o ON o.barcode = w.barcode",
+            "JOIN oz_barcodes AS o ON o.barcode = w.barcode\n          " + punta_joins,
+        )
+        sql = sql_head + sql_mid + joined_sql
+    else:
+        sql = sql_head + joined_sql
+
     if limit_per_input is None or int(limit_per_input) <= 0:
         params = [None, 0]
     else:
@@ -316,7 +426,32 @@ def _matches_for_barcodes(
     df_inp = pd.DataFrame({"barcode": barcodes})
     local_con.register("inputs", df_inp)
 
-    sql = r"""
+    punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
+
+    punta_cte = r"""
+    punta_map AS (
+        SELECT pb.barcode,
+               pb.external_code,
+               ppc.collection
+        FROM punta_barcodes pb
+        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
+    )
+    """ if punta_enabled else ""
+
+    punta_select = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+    """ if punta_enabled else ""
+
+    punta_joins = r"""
+        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = o.oz_primary_barcode
+        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = w.wb_primary_barcode
+    """ if punta_enabled else ""
+
+    sql_head = r"""
     WITH inp AS (
         SELECT TRIM(barcode) AS barcode FROM inputs WHERE TRIM(barcode) <> ''
     ),
@@ -365,7 +500,11 @@ def _matches_for_barcodes(
                wp.primary_barcode AS wb_primary_barcode
         FROM wb_products AS wp,
              json_each(COALESCE(wp.barcodes, '[]')) AS j
-    ),
+    )
+    """
+
+    joined_sql = r"""
+    ,
     joined AS (
         SELECT i.barcode AS input_barcode,
                o.oz_sku,
@@ -384,12 +523,6 @@ def _matches_for_barcodes(
                w.wb_article,
                w.wb_brand,
                w.wb_color,
-               CASE
-                   WHEN o.is_primary AND w.is_primary THEN 'primary↔primary'
-                   WHEN o.is_primary AND NOT w.is_primary THEN 'primary↔any'
-                   WHEN NOT o.is_primary AND w.is_primary THEN 'any↔primary'
-                   ELSE 'any↔any'
-               END AS matched_by,
                CASE
                    WHEN o.is_primary AND w.is_primary THEN 100
                    WHEN o.is_primary OR  w.is_primary THEN 80
@@ -410,6 +543,27 @@ def _matches_for_barcodes(
     WHERE (? IS NULL OR r.rn <= ?)
     ORDER BY r.input_barcode, r.match_score DESC, r.oz_sku, r.wb_sku
     """
+
+    if punta_enabled:
+        sql_mid = ",\n    " + punta_cte + "\n"
+        joined_enrich = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+        """
+        joined_sql = joined_sql.replace(
+            "FROM inp i",
+            joined_enrich + "        FROM inp i",
+        )
+        joined_sql = joined_sql.replace(
+            "JOIN wb_barcodes w ON w.barcode = i.barcode",
+            "JOIN wb_barcodes w ON w.barcode = i.barcode\n          " + punta_joins,
+        )
+        sql = sql_head + sql_mid + joined_sql
+    else:
+        sql = sql_head + joined_sql
 
     if limit_per_barcode is None or int(limit_per_barcode) <= 0:
         params = [None, 0]

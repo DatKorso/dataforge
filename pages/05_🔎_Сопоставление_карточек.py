@@ -55,6 +55,12 @@ DEFAULT_COLUMNS = [
     "barcode_hit",
     "matched_by",
     "match_score",
+    # Punta
+    "punta_external_code_oz",
+    "punta_collection_oz",
+    "punta_external_code_wb",
+    "punta_collection_wb",
+    "punta_external_equal",
 ]
 
 ALL_COLUMNS = [
@@ -79,6 +85,12 @@ ALL_COLUMNS = [
     "barcode_hit",
     "matched_by",
     "match_score",
+    # Punta (optional enrichment)
+    "punta_external_code_oz",
+    "punta_collection_oz",
+    "punta_external_code_wb",
+    "punta_collection_wb",
+    "punta_external_equal",
 ]
 
 
