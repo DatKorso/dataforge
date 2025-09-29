@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from collections.abc import Mapping
 
 import streamlit as st
 
@@ -46,6 +47,18 @@ def _get_secret(key: str, default: Any = None) -> Any:
         return default
 
 
+def _to_bool(val: Any, *, default: bool = False) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return default
+    try:
+        s = str(val).strip().lower()
+    except Exception:
+        return default
+    return s in {"1", "true", "yes", "y", "on"}
+
+
 def feature_enabled(flag: str, *, default: bool = True) -> bool:
     """Check whether a feature flag is enabled.
 
@@ -55,10 +68,10 @@ def feature_enabled(flag: str, *, default: bool = True) -> bool:
     3) provided default
     """
     # 1) secrets
-    features = _get_secret("features", {}) or {}
-    if isinstance(features, dict) and flag in features:
+    features = _get_secret("features", {})
+    if isinstance(features, Mapping) and flag in features:
         try:
-            return bool(features[flag])
+            return _to_bool(features[flag], default=default)
         except Exception:
             return default
 
@@ -66,7 +79,7 @@ def feature_enabled(flag: str, *, default: bool = True) -> bool:
     env_key = f"FEATURE_{flag.upper()}"
     env_val = os.getenv(env_key)
     if env_val is not None:
-        return env_val.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return _to_bool(env_val, default=default)
 
     # 3) default
     return default
