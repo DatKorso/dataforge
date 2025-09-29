@@ -106,7 +106,7 @@ def _select_barcode(raw: Any, prefer_last: bool = False) -> str | None:
 
 # Дополнительные параметры для отдельных отчётов
 punta_collection: str | None = None
-if report_id == "punta_barcodes":
+if report_id in ("punta_barcodes", "punta_products"):
     punta_collection = st.text_input(
         "Коллекция",
         value=st.session_state.get("punta_collection", ""),
@@ -179,7 +179,7 @@ with st.expander("Параметры импорта", expanded=False):
             value=True,
             help="Рекомендуется для отчётов, которые представляют полное состояние (например, список товаров)",
         )
-        if report_id == "punta_barcodes":
+        if report_id in ("punta_barcodes", "punta_products"):
             st.caption("Для Punta очистка применяется только к выбранной коллекции.")
     else:
         st.caption("Для Punta Google данные читаются из Google Sheets; 2-я строка пропускается; импорт всегда заменяет таблицу.")
@@ -256,7 +256,7 @@ if has_input and report_id != "punta_google":
                         )
 
                 # Подстановка значения коллекции для отчёта Punta
-                if report_id == "punta_barcodes":
+                if report_id in ("punta_barcodes", "punta_products"):
                     if not punta_collection:
                         st.warning("Укажите значение поля 'Коллекция' перед предпросмотром.")
                         st.stop()
@@ -312,14 +312,15 @@ if has_input and report_id != "punta_google":
                     st.dataframe(_arrow_safe(pd.DataFrame(vr.errors)), width="stretch")
 
                     # Логирование ошибок в файл (только для Punta)
-                    if report_id == "punta_barcodes":
+                    if report_id in ("punta_barcodes", "punta_products"):
                         from datetime import datetime
                         from pathlib import Path as _Path
 
                         log_dir = _Path("logs")
                         log_dir.mkdir(exist_ok=True)
                         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-                        log_path = log_dir / f"punta_barcodes_{ts}.log"
+                        suffix = "punta_barcodes" if report_id == "punta_barcodes" else "punta_products"
+                        log_path = log_dir / f"{suffix}_{ts}.log"
                         lines = [
                             f"row={e.get('row')} | errors={e.get('errors')}" for e in vr.errors
                         ]
@@ -365,7 +366,7 @@ if has_input and report_id != "punta_google":
                         df_ready = filter_df_by_brands(df_ready, allowed_brands)
 
                     with st.spinner("Загрузка в MotherDuck..."):
-                        if report_id == "punta_barcodes":
+                        if report_id in ("punta_barcodes", "punta_products"):
                             # Для Punta всегда заменяем данные конкретной коллекции
                             coll = st.session_state.get("punta_collection")
                             if not coll:

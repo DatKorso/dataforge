@@ -385,6 +385,37 @@ def get_registry() -> Dict[str, ReportSpec]:
         assembler=None,
     )
 
+    # Punta products (single file)
+    punta_products = ReportSpec(
+        id="punta_products",
+        name="Punta — Товары",
+        description=(
+            "Импорт Excel с данными по товарам Punta. Перед загрузкой пользователь "
+            "должен указать значение 'Коллекция'; перед вставкой все записи этой коллекции "
+            "в таблице будут удалены."
+        ),
+        table="punta_products",
+        allowed_extensions=["xlsx", "xls"],
+        default_encoding="utf-8",
+        delimiter=None,
+        header_row=0,
+        columns=[
+            ColumnSpec("Коллекция", "collection", required=True, transform="string_clean"),
+            ColumnSpec("Уникальный идентификатор", "un-id", required=True, transform="code_text"),
+            ColumnSpec("Статус обработки", "status", required=False, transform="string_clean"),
+            ColumnSpec("Оптовый покупатель", "buyer", required=False, transform="string_clean"),
+            ColumnSpec("Артикул", "pn_article", required=False, transform="string_clean"),
+            ColumnSpec("Группировочный код", "group_code", required=False, transform="code_text"),
+            ColumnSpec("Код оригинальной модели", "original_code", required=False, transform="code_text"),
+            ColumnSpec("Внешний код", "external_code_list", required=False, transform="paragraphs_json"),
+            ColumnSpec("Себестоимость (п), USD", "cost_usd", required=False, transform="decimal2"),
+        ],
+        unique_fields_in_batch=["un-id"],
+        computed_fields={},
+        multi_file=False,
+        assembler=None,
+    )
+
     # Punta Google (dynamic schema from Google Sheets CSV)
     punta_google = ReportSpec(
         id="punta_google",
@@ -413,5 +444,6 @@ def get_registry() -> Dict[str, ReportSpec]:
         wb_products.id: wb_products,
         wb_prices.id: wb_prices,
         punta_barcodes.id: punta_barcodes,
+        punta_products.id: punta_products,
         punta_google.id: punta_google,
     }

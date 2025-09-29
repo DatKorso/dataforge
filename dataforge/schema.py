@@ -249,6 +249,34 @@ def get_all_schemas() -> Dict[str, TableSchema]:
 
     punta_bc = _punta_barcodes_schema()
 
+    # Punta products schema
+    def _punta_products_schema() -> TableSchema:
+        name = "punta_products"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            collection VARCHAR(100),
+            "un-id" VARCHAR(100),
+            status VARCHAR(100),
+            buyer VARCHAR(150),
+            pn_article VARCHAR(100),
+            group_code VARCHAR(100),
+            original_code VARCHAR(100),
+            external_code_list TEXT,
+            cost_usd DECIMAL(10,2)
+        )
+        """
+        idx_defs = [
+            (f"idx_{name}_collection", f'CREATE INDEX {{}} ON "{name}" (collection)'),
+            (f"idx_{name}_un_id", f'CREATE INDEX {{}} ON "{name}" ("un-id")'),
+            (f"idx_{name}_pn_article", f'CREATE INDEX {{}} ON "{name}" (pn_article)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    punta_prod = _punta_products_schema()
+
     return {
         prod.name: prod,
         orders.name: orders,
@@ -256,6 +284,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
         wb_prod.name: wb_prod,
         wb_prices_tbl.name: wb_prices_tbl,
         punta_bc.name: punta_bc,
+        punta_prod.name: punta_prod,
     }
 
 

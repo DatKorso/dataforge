@@ -288,6 +288,26 @@ def urls_json(v: Any) -> Optional[str]:
     return json.dumps(parts, ensure_ascii=False)
 
 
+def paragraphs_json(v: Any) -> Optional[str]:
+    """Split cell text by paragraph (newline) boundaries and serialize to JSON array.
+
+    Behavior:
+    - None/empty -> None
+    - Single-line text -> [text]
+    - Multi-line text (separated by \n/\r\n) -> [line1, line2, ...]
+    """
+    s = string_clean(v)
+    if s is None:
+        return None
+    # Normalize Windows CRLF to LF and split by LF
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    parts = [p.strip() for p in s.split("\n")]
+    parts = [p for p in parts if p]
+    if not parts:
+        return None
+    return json.dumps(parts, ensure_ascii=False)
+
+
 # Registry of transformer functions
 TRANSFORMERS = {
     "string_clean": string_clean,
@@ -308,6 +328,7 @@ TRANSFORMERS = {
     "timestamp": timestamp,
     "barcodes_json": barcodes_json,
     "urls_json": urls_json,
+    "paragraphs_json": paragraphs_json,
     "lower_clean": lower_clean,
     "digits_only": digits_only,
     "code_text": code_text,
