@@ -297,6 +297,27 @@ def get_all_schemas() -> Dict[str, TableSchema]:
 
     punta_prod_codes = _punta_products_codes_schema()
 
+    # Punta collections metadata (name, priority, active flag)
+    def _punta_collections_schema() -> TableSchema:
+        name = "punta_collections"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            collection TEXT PRIMARY KEY,
+            priority INTEGER NOT NULL,
+            active BOOLEAN DEFAULT TRUE
+        )
+        """
+
+        idx_defs = [
+            (f"idx_{name}_priority", f'CREATE INDEX {{}} ON "{name}" (priority)'),
+        ]
+        index_sql: List[Tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
+    punta_colls = _punta_collections_schema()
+
     return {
         prod.name: prod,
         orders.name: orders,
@@ -306,6 +327,7 @@ def get_all_schemas() -> Dict[str, TableSchema]:
         punta_bc.name: punta_bc,
         punta_prod.name: punta_prod,
         punta_prod_codes.name: punta_prod_codes,
+        punta_colls.name: punta_colls,
     }
 
 

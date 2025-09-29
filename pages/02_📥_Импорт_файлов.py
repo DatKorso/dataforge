@@ -24,6 +24,11 @@ from dataforge.imports.google_sheets import (
 )
 from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
 from dataforge.schema import rebuild_punta_products_codes
+from dataforge.collections import (
+    list_punta_collections,
+    ensure_punta_collection,
+    get_punta_priority,
+)
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
@@ -110,12 +115,75 @@ def _select_barcode(raw: Any, prefer_last: bool = False) -> str | None:
 # Дополнительные параметры для отдельных отчётов
 punta_collection: str | None = None
 if report_id in ("punta_barcodes", "punta_products"):
-    punta_collection = st.text_input(
-        "Коллекция",
-        value=st.session_state.get("punta_collection", ""),
-        help="Укажите название коллекции. Перед загрузкой данные этой коллекции будут очищены.",
-    )
+    # Try to read MD credentials from session/secrets (best-effort)
+    def _sget(key: str) -> str | None:
+        try:
+            return st.secrets[key]  # type: ignore[index]
+        except Exception:
+            return None
+
+    md_token = st.session_state.get("md_token") or _sget("md_token")
+    md_database = st.session_state.get("md_database") or _sget("md_database")
+
+    # Fetch available collections (ignore errors if not connected yet)
+    try:
+        df_colls = list_punta_collections(md_token=md_token, md_database=md_database)
+        collections = df_colls["collection"].astype(str).tolist() if not df_colls.empty else []
+    except Exception:
+        collections = []
+
+    col_sel, col_new = st.columns([3, 1])
+    with col_sel:
+        punta_collection = st.selectbox(
+            "Коллекция",
+            options=collections if collections else ["— нет коллекций —"],
+            index=0,
+            help="Выберите коллекцию. Новую коллекцию можно создать справа.",
+        )
+        if punta_collection == "— нет коллекций —":
+            punta_collection = ""
+
+    with col_new:
+        if st.button("➕ Новая"):
+            st.session_state["_add_punta_coll_mode"] = True
+
+    if st.session_state.get("_add_punta_coll_mode"):
+        new_name = st.text_input("Название новой коллекции", value="")
+        cols_act = st.columns([1, 1])
+        with cols_act[0]:
+            if st.button("Создать") and new_name.strip():
+                try:
+                    _, _prio = ensure_punta_collection(
+                        new_name.strip(), md_token=md_token, md_database=md_database
+                    )
+                    # Refresh list after creation
+                    try:
+                        df_colls = list_punta_collections(md_token=md_token, md_database=md_database)
+                        collections = (
+                            df_colls["collection"].astype(str).tolist() if not df_colls.empty else []
+                        )
+                    except Exception:
+                        pass
+                    punta_collection = new_name.strip()
+                    st.session_state["_add_punta_coll_mode"] = False
+                    st.success(f"Создана коллекция '{punta_collection}' (приоритет {_prio}).")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Не удалось создать коллекцию: {exc}")
+        with cols_act[1]:
+            if st.button("Отмена"):
+                st.session_state["_add_punta_coll_mode"] = False
+
+    # Save selection to session
     st.session_state["punta_collection"] = punta_collection
+
+    # Show current priority (read-only hint)
+    if punta_collection:
+        try:
+            pr = get_punta_priority(punta_collection, md_token=md_token, md_database=md_database)
+            if pr is not None:
+                st.caption(f"Приоритет коллекции: {pr}")
+        except Exception:
+            pass
 
 uploaded = None
 gs_url: str | None = None
@@ -375,6 +443,14 @@ if has_input and report_id != "punta_google":
                             if not coll:
                                 st.error("Не указана коллекция для загрузки.")
                                 st.stop()
+                            # Гарантируем наличие коллекции (создаст с новым приоритетом, если нет)
+                            try:
+                                ensure_punta_collection(
+                                    str(coll), md_token=md_token, md_database=md_database
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                st.warning(f"Не удалось проверить/создать коллекцию: {exc}")
+
                             msg = load_dataframe_partitioned(
                                 df_ready,
                                 table=spec.table,

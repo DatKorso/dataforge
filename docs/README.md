@@ -50,6 +50,21 @@ Located in `files_examples/` directory:
 - **Wildberries Prices**: Price comparison functionality
 - **Punta Tables**: Custom table structure
 
+### Punta Collections
+- Collections are managed in a dedicated table `punta_collections` with fields:
+  - `collection` (TEXT, primary key)
+  - `priority` (INTEGER)
+  - `active` (BOOLEAN, reserved for future use)
+
+- Import flow (Files → Punta):
+  - Select an existing collection from the dropdown or create a new one.
+  - The app replaces data only for the selected collection (partitioned by `collection`).
+  - Current collection priority is shown as a hint.
+
+- Managing order (Pages → 🗂 Коллекции):
+  - Reorder collections via drag‑and‑drop (uses `streamlit-sortables`) and click “Save order”.
+  - If the component is unavailable, edit numeric priorities in the table and save; priorities will be normalized to 1..n.
+
 ## 📝 Reading the Specifications
 
 Each technical specification document follows this structure:

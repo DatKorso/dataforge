@@ -12,6 +12,7 @@ dependencies = [
     "toml>=0.10",
     "openpyxl>=3.1",
     "watchdog>=6.0.0",
+    "streamlit-sortables",
 ]
 
 [tool.uv]
