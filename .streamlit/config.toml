@@ -7,4 +7,7 @@ textColor = "#1F2937"
 
 [server]
 runOnSave = true
-
+port = 8501
+address = "0.0.0.0"
+enableCORS = false
+headless = true
