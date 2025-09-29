@@ -89,3 +89,14 @@ def test_punta_enrichment_primary_only():
     # And equality flag is true
     assert bool(row.get("punta_external_equal")) is True
 
+
+def test_search_by_external_code_returns_matches() -> None:
+    con = _prepare_conn_with_punta()
+    df = search_matches(["EXT1"], input_type="punta_external_code", limit_per_input=5, con=con)
+    assert not df.empty
+    row = df.iloc[0]
+    assert row.get("input_external_code") == "EXT1"
+    assert str(row.get("oz_sku")) == "111"
+    assert str(row.get("wb_sku")) == "1001"
+    assert bool(row.get("punta_external_equal")) is True
+

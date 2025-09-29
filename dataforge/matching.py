@@ -573,6 +573,189 @@ def _matches_for_barcodes(
     return df
 
 
+def _matches_for_external_codes(
+    external_codes: list[str],
+    limit_per_code: int | None = None,
+    *,
+    con: duckdb.DuckDBPyConnection | None = None,
+    md_token: str | None = None,
+    md_database: str | None = None,
+) -> pd.DataFrame:
+    """Найти соответствия для списка Punta external_code.
+
+    Возвращает детализированный DataFrame с обеими сторонами маркетплейсов
+    и колонкой `input_external_code`, показывающей исходный код поиска.
+    """
+    if not external_codes:
+        return pd.DataFrame()
+
+    local_con = _ensure_connection(con, md_token=md_token, md_database=md_database)
+
+    punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(
+        local_con, "punta_products_codes"
+    )
+    if not punta_enabled:
+        raise ValueError(
+            "Поиск по Punta external_code недоступен: отсутствуют таблицы punta_barcodes/punta_products_codes."
+        )
+
+    df_inp = pd.DataFrame({"external_code": external_codes})
+    local_con.register("inputs_ext", df_inp)
+
+    sql_head = r"""
+    WITH inp AS (
+        SELECT DISTINCT TRIM(external_code) AS external_code
+        FROM inputs_ext
+        WHERE TRIM(external_code) <> ''
+    ),
+    ext_barcodes AS (
+        SELECT i.external_code,
+               pb.barcode
+        FROM inp i
+        JOIN punta_barcodes pb ON pb.external_code = i.external_code
+        WHERE pb.barcode IS NOT NULL
+    ),
+    oz_full AS (
+        SELECT p.oz_sku,
+               p.oz_vendor_code,
+               CAST(p."barcode-primary" AS VARCHAR) AS oz_barcode_primary
+        FROM oz_products AS p
+    ),
+    oz_barcodes AS (
+        SELECT f.oz_vendor_code,
+               o.oz_sku,
+               json_extract_string(j.value, '$') AS barcode,
+               CASE WHEN json_extract_string(j.value, '$') = f.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
+               f.primary_barcode AS oz_primary_barcode,
+               f.russian_size AS oz_russian_size,
+               f.product_name AS oz_product_name,
+               f.brand AS oz_brand,
+               f.color AS oz_color
+        FROM oz_products_full AS f
+        JOIN oz_full o ON o.oz_vendor_code = f.oz_vendor_code
+        , json_each(COALESCE(f.barcodes, '[]')) AS j
+        UNION ALL
+        SELECT o.oz_vendor_code,
+               o.oz_sku,
+               o.oz_barcode_primary AS barcode,
+               TRUE AS is_primary,
+               o.oz_barcode_primary AS oz_primary_barcode,
+               NULL::VARCHAR AS oz_russian_size,
+               NULL::VARCHAR AS oz_product_name,
+               NULL::VARCHAR AS oz_brand,
+               NULL::VARCHAR AS oz_color
+        FROM oz_full o
+        LEFT JOIN oz_products_full f ON f.oz_vendor_code = o.oz_vendor_code
+        WHERE o.oz_barcode_primary IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM json_each(COALESCE(f.barcodes, '[]')) AS j
+              WHERE json_extract_string(j.value, '$') = o.oz_barcode_primary
+          )
+    ),
+    wb_barcodes AS (
+        SELECT wp.wb_sku,
+               json_extract_string(j.value, '$') AS barcode,
+               CASE WHEN json_extract_string(j.value, '$') = wp.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
+               wp.size AS wb_size,
+               wp.wb_article AS wb_article,
+               wp.brand AS wb_brand,
+               wp.color AS wb_color,
+               wp.primary_barcode AS wb_primary_barcode
+        FROM wb_products AS wp,
+             json_each(COALESCE(wp.barcodes, '[]')) AS j
+    )
+    """
+
+    punta_cte = r"""
+    punta_map AS (
+        SELECT pb.barcode,
+               pb.external_code,
+               ppc.collection
+        FROM punta_barcodes pb
+        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
+    )
+    """
+
+    punta_joins = r"""
+        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = o.oz_primary_barcode
+        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = w.wb_primary_barcode
+    """
+
+    joined_sql = r"""
+    ,
+    joined AS (
+        SELECT eb.external_code AS input_external_code,
+               o.oz_sku,
+               o.oz_vendor_code,
+               w.wb_sku,
+               eb.barcode AS barcode_hit,
+               o.is_primary AS oz_is_primary_hit,
+               w.is_primary AS wb_is_primary_hit,
+               o.oz_primary_barcode,
+               o.oz_russian_size,
+               o.oz_product_name,
+               o.oz_brand,
+               o.oz_color,
+               w.wb_primary_barcode,
+               w.wb_size,
+               w.wb_article,
+               w.wb_brand,
+               w.wb_color,
+               CASE
+                   WHEN o.is_primary AND w.is_primary THEN 'primary↔primary'
+                   WHEN o.is_primary AND NOT w.is_primary THEN 'primary↔any'
+                   WHEN NOT o.is_primary AND w.is_primary THEN 'any↔primary'
+                   ELSE 'any↔any'
+               END AS matched_by,
+               CASE
+                   WHEN o.is_primary AND w.is_primary THEN 100
+                   WHEN o.is_primary OR  w.is_primary THEN 80
+                   ELSE 60
+               END AS match_score
+        FROM ext_barcodes AS eb
+        JOIN oz_barcodes AS o ON o.barcode = eb.barcode
+        JOIN wb_barcodes AS w ON w.barcode = eb.barcode
+    ),
+    ranked AS (
+        SELECT j.*, ROW_NUMBER() OVER (
+            PARTITION BY j.input_external_code ORDER BY j.match_score DESC, j.oz_sku, j.wb_sku
+        ) AS rn
+        FROM joined j
+    )
+    SELECT r.*
+    FROM ranked r
+    WHERE (? IS NULL OR r.rn <= ?)
+    ORDER BY r.input_external_code, r.match_score DESC, r.oz_sku, r.wb_sku
+    """
+
+    joined_enrich = r"""
+               , pm_oz.collection AS punta_collection_oz
+               , pm_oz.external_code AS punta_external_code_oz
+               , pm_wb.collection AS punta_collection_wb
+               , pm_wb.external_code AS punta_external_code_wb
+               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
+    """
+
+    sql_mid = ",\n    " + punta_cte + "\n"
+    joined_sql = joined_sql.replace(
+        "FROM ext_barcodes AS eb",
+        joined_enrich + "        FROM ext_barcodes AS eb",
+    )
+    joined_sql = joined_sql.replace(
+        "JOIN wb_barcodes AS w ON w.barcode = eb.barcode",
+        "JOIN wb_barcodes AS w ON w.barcode = eb.barcode\n          " + punta_joins,
+    )
+
+    sql = sql_head + sql_mid + joined_sql
+
+    if limit_per_code is None or int(limit_per_code) <= 0:
+        params = [None, 0]
+    else:
+        params = [int(limit_per_code), int(limit_per_code)]
+    df = local_con.execute(sql, params).fetch_df()
+    return df
+
+
 def find_wb_by_oz(
     oz_sku: str,
     limit: int | None = None,
@@ -659,7 +842,7 @@ def find_by_barcodes(
 def search_matches(
     inputs: Iterable[str],
     *,
-    input_type: str,  # 'oz_sku' | 'wb_sku' | 'barcode' | 'oz_vendor_code'
+    input_type: str,  # 'oz_sku' | 'wb_sku' | 'barcode' | 'oz_vendor_code' | 'punta_external_code'
     limit_per_input: int | None = None,
     con: duckdb.DuckDBPyConnection | None = None,
     md_token: str | None = None,
@@ -669,7 +852,7 @@ def search_matches(
 
     Параметры:
     - inputs: набор значений, поддерживается 10–300+ значений
-    - input_type: один из 'oz_sku' | 'wb_sku' | 'barcode' | 'oz_vendor_code'
+    - input_type: один из 'oz_sku' | 'wb_sku' | 'barcode' | 'oz_vendor_code' | 'punta_external_code'
     - limit_per_input: ограничение числа кандидатов на одно входное значение
     """
     vals = _normalize_barcodes(inputs)  # переиспользуем нормализацию токенов
@@ -682,6 +865,8 @@ def search_matches(
         return _matches_for_wb_skus(vals, limit_per_input=limit_per_input, con=con, md_token=md_token, md_database=md_database)
     if input_type == "barcode":
         return _matches_for_barcodes(vals, limit_per_barcode=limit_per_input, con=con, md_token=md_token, md_database=md_database)
+    if input_type == "punta_external_code":
+        return _matches_for_external_codes(vals, limit_per_code=limit_per_input, con=con, md_token=md_token, md_database=md_database)
     if input_type == "oz_vendor_code":
         # Переведём oz_vendor_code → oz_sku для единообразия (берём все oz_sku данной карточки)
         local_con = _ensure_connection(con, md_token=md_token, md_database=md_database)

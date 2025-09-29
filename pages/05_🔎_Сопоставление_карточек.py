@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass, field
 
 import pandas as pd
 import streamlit as st
@@ -8,6 +9,31 @@ from dataforge.matching import search_matches
 from dataforge.ui import setup_page
 
 setup_page(title="DataForge", icon="🛠️")
+
+DEFECT_PREFIX = "БракSH"
+
+@dataclass
+class MatchConfig:
+    """Configuration for marketplace matching search."""
+
+    md_token: str | None = None
+    md_database: str | None = None
+    filter_no_defect: bool = True
+    filter_unique_sizes: bool = True
+    limit_per_input: int = 0
+    selected_cols: list[str] = field(default_factory=lambda: DEFAULT_COLUMNS.copy())
+
+
+def get_config() -> MatchConfig:
+    """Load configuration from session state and secrets."""
+    return MatchConfig(
+        md_token=st.session_state.get("md_token") or _sget("md_token"),
+        md_database=st.session_state.get("md_database") or _sget("md_database"),
+        filter_no_defect=st.session_state.get("mp_filter_no_defect", True),
+        filter_unique_sizes=st.session_state.get("mp_filter_unique_sizes", True),
+        limit_per_input=int(st.session_state.get("limit_per_input", 0)),
+        selected_cols=st.session_state.get("mp_selected_cols", DEFAULT_COLUMNS.copy()),
+    )
 st.title("🔎 Поиск соответствий карточек (Ozon ↔ WB)")
 st.caption(
     "Найдите общие карточки между маркетплейсами по штрихкодам. Поддерживается массовый ввод."
@@ -40,6 +66,45 @@ def parse_input(text: str) -> list[str]:
     return [t for t in tokens if t]
 
 
+def _dedupe_sizes(df: pd.DataFrame, input_type: str) -> pd.DataFrame:
+    """Remove duplicate sizes keeping the highest match_score per size group.
+
+    Rules:
+    - If input_type is 'wb_sku': keep unique wb_size within each wb_sku
+    - If input_type is 'oz_sku' or 'oz_vendor_code': keep unique oz_russian_size within each oz_sku
+    - Otherwise (e.g., barcode), leave as is
+    """
+    if df.empty:
+        return df
+
+    if input_type == "wb_sku":
+        size_col = "wb_size"
+        group_cols = ["wb_sku", size_col]
+    elif input_type in ("oz_sku", "oz_vendor_code"):
+        size_col = "oz_russian_size"
+        group_cols = ["oz_sku", size_col]
+    else:
+        return df
+
+    if "match_score" not in df.columns or any(col not in df.columns for col in group_cols):
+        return df
+
+    # Work only with rows where size is non-empty/non-null; keep others intact
+    mask_known_size = df[size_col].notna() & (df[size_col].astype(str).str.strip() != "")
+    df_known = df.loc[mask_known_size].copy()
+    df_unknown = df.loc[~mask_known_size].copy()
+
+    if df_known.empty:
+        return df
+
+    # Sort to keep the highest score first; tie-breakers stay stable
+    df_known = df_known.sort_values(["match_score"], ascending=[False])
+    df_known = df_known.drop_duplicates(subset=group_cols, keep="first")
+
+    # Preserve original order as much as possible: place known first by score, then unknown
+    return pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
+
+
 DEFAULT_COLUMNS = [
     "oz_sku",
     "oz_vendor_code",
@@ -50,6 +115,7 @@ DEFAULT_COLUMNS = [
     "oz_is_primary_hit",
     "wb_is_primary_hit",
     "barcode_hit",
+    "input_external_code",
     "matched_by",
     "match_score",
     # Punta
@@ -80,6 +146,7 @@ ALL_COLUMNS = [
     "oz_is_primary_hit",
     "wb_is_primary_hit",
     "barcode_hit",
+    "input_external_code",
     "matched_by",
     "match_score",
     # Punta (optional enrichment)
@@ -102,6 +169,7 @@ with st.form(key="mp_match_form"):
                 ("Артикул WB (wb_sku)", "wb_sku"),
                 ("Штрихкод", "barcode"),
                 ("Артикул поставщика Ozon (oz_vendor_code)", "oz_vendor_code"),
+                ("Punta external code (external_code)", "punta_external_code"),
             ],
             format_func=lambda x: x[0],
             key="mp_input_option",
@@ -168,6 +236,10 @@ if submitted:
             f"Передано {len(values)} значений. Это может занять время, дождитесь завершения."
         )
 
+    if not md_token:
+        st.error("MD токен отсутствует. Укажите его на странице Настройки.")
+        st.stop()
+
     try:
         with st.spinner("Поиск соответствий..."):
             df_res = search_matches(
@@ -177,65 +249,30 @@ if submitted:
                 md_token=md_token,
                 md_database=md_database,
             )
+        # Apply filters immediately
         filter_no_defect = st.session_state.get("mp_filter_no_defect", True)
         if filter_no_defect and "oz_vendor_code" in df_res.columns:
             starts_with_brak = (
-                df_res["oz_vendor_code"].fillna("").astype(str).str.startswith("БракSH")
+                df_res["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
             )
             df_res = df_res.loc[~starts_with_brak]
+
+        # Apply deduplication before storing
+        if st.session_state.get("mp_filter_unique_sizes", True):
+            df_res = _dedupe_sizes(df_res, input_type=input_type)
+
         st.session_state["mp_match_result"] = df_res
-        # Запоминаем, с каким типом инпута выполнялся поиск — для последующей дедупликации
         st.session_state["mp_input_type"] = input_type
-    except Exception as exc:  # noqa: BLE001
+    except ValueError as exc:
+        st.error(f"❌ Ошибка валидации данных: {exc}")
+    except (ConnectionError, TimeoutError) as exc:
+        st.error(f"🔌 Ошибка подключения к базе данных: {exc}")
+    except Exception as exc:
+        st.error("⚠️ Неожиданная ошибка при поиске соответствий:")
         st.exception(exc)
 
 
-def _dedupe_sizes(df: pd.DataFrame, input_type: str) -> pd.DataFrame:
-    """Remove duplicate sizes keeping the highest match_score per size group.
-
-    Rules:
-    - If input_type is 'wb_sku': keep unique wb_size within each wb_sku
-    - If input_type is 'oz_sku' or 'oz_vendor_code': keep unique oz_russian_size within each oz_sku
-    - Otherwise (e.g., barcode), leave as is
-    """
-    if df.empty:
-        return df
-
-    if input_type == "wb_sku":
-        size_col = "wb_size"
-        group_cols = ["wb_sku", size_col]
-    elif input_type in ("oz_sku", "oz_vendor_code"):
-        size_col = "oz_russian_size"
-        group_cols = ["oz_sku", size_col]
-    else:
-        return df
-
-    if "match_score" not in df.columns or any(col not in df.columns for col in group_cols):
-        return df
-
-    # Work only with rows where size is non-empty/non-null; keep others intact
-    mask_known_size = df[size_col].notna() & (df[size_col].astype(str).str.strip() != "")
-    df_known = df.loc[mask_known_size].copy()
-    df_unknown = df.loc[~mask_known_size].copy()
-
-    if df_known.empty:
-        return df
-
-    # Sort to keep the highest score first; tie-breakers stay stable
-    df_known = df_known.sort_values(["match_score"], ascending=[False])
-    df_known = df_known.drop_duplicates(subset=group_cols, keep="first")
-
-    # Preserve original order as much as possible: place known first by score, then unknown
-    out = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
-    return out
-
-
 df_show: pd.DataFrame = st.session_state.get("mp_match_result", pd.DataFrame())
-
-# Опционально фильтруем дубли размеров по текущему режиму поиска
-if not df_show.empty and st.session_state.get("mp_filter_unique_sizes", True):
-    current_input_type = st.session_state.get("mp_input_type", "")
-    df_show = _dedupe_sizes(df_show, input_type=current_input_type)
 
 if df_show.empty:
     st.info("Результаты будут показаны здесь после нажатия кнопки ‘Найти’.")
