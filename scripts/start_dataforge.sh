@@ -8,5 +8,4 @@ cd "$(dirname "$0")/.."
 export PYTHONUNBUFFERED=1
 
 # Run Streamlit via UV using project config (.streamlit/config.toml)
-exec uv run streamlit run app.py
-
+exec uv run streamlit run app.py --server.port 40287 --server.address 0.0.0.0
