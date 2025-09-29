@@ -28,10 +28,12 @@ from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
 from dataforge.secrets import save_secrets
-from dataforge.ui import setup_page
+from dataforge.ui import setup_page, guard_page
 from dataforge.utils import filter_df_by_brands, parse_brand_list
 
 setup_page(title="DataForge", icon="🛠️")
+# Ограничиваем доступ к странице импорта по фиче-флагу
+guard_page("enable_imports", default=True, message="Страница импорта отключена на сервере.")
 st.title("📥 Импорт файлов")
 st.caption(
     "Загрузочный хаб для обновления таблиц БД. Добавляйте отчёты маркетплейсов и загружайте в MotherDuck."
