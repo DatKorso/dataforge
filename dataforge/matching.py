@@ -98,8 +98,8 @@ def _matches_for_oz_skus(
     """ if punta_enabled else ""
 
     punta_joins = r"""
-        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)
-        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)
+    LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
+    LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
     """ if punta_enabled else ""
 
     sql_head = r"""
@@ -279,8 +279,8 @@ def _matches_for_wb_skus(
     """ if punta_enabled else ""
 
     punta_joins = r"""
-        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)
-        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)
+    LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
+    LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
     """ if punta_enabled else ""
 
     sql_head = r"""
@@ -447,8 +447,8 @@ def _matches_for_barcodes(
     """ if punta_enabled else ""
 
     punta_joins = r"""
-        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)
-        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)
+        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
+        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
     """ if punta_enabled else ""
 
     sql_head = r"""
@@ -550,6 +550,7 @@ def _matches_for_barcodes(
     """
 
     if punta_enabled:
+        # Build the punta CTE injection and insert punta-related selected columns
         sql_mid = ",\n    " + punta_cte + "\n"
         joined_enrich = r"""
                , pm_oz.collection AS punta_collection_oz
@@ -558,13 +559,20 @@ def _matches_for_barcodes(
                , pm_wb.external_code AS punta_external_code_wb
                , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
         """
+        # Insert punta selected columns after the FROM clause
         joined_sql = joined_sql.replace(
             "FROM inp AS i",
             joined_enrich + "        FROM inp AS i",
         )
+        # Insert pm_oz join immediately after the oz_barcodes join
         joined_sql = joined_sql.replace(
             "LEFT JOIN oz_barcodes AS o ON o.barcode = i.barcode",
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = i.barcode\n          " + punta_joins,
+            "LEFT JOIN oz_barcodes AS o ON o.barcode = i.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)",
+        )
+        # Insert pm_wb join immediately after the wb_barcodes join (separately)
+        joined_sql = joined_sql.replace(
+            "LEFT JOIN wb_barcodes AS w ON w.barcode = i.barcode",
+            "LEFT JOIN wb_barcodes AS w ON w.barcode = i.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)",
         )
         sql = sql_head + sql_mid + joined_sql
     else:
@@ -745,13 +753,13 @@ def _matches_for_external_codes(
             "FROM matched AS m",
             punta_select + "        FROM matched AS m",
         )
-        .replace(
+            .replace(
             "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode",
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)",
+            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)",
         )
         .replace(
             "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode",
-            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)",
+            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)",
         )
     )
 
