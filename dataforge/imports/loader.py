@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 from dataforge.db import get_connection
+from dataforge.imports.metadata import set_last_import
 from dataforge.schema import get_all_schemas, init_schema, rebuild_indexes
 
 
@@ -41,7 +42,7 @@ def load_dataframe(
             except Exception:
                 info = None
 
-            table_cols = set([str(x) for x in (info["name"].tolist() if info is not None else [])])
+            table_cols = {str(x) for x in (info["name"].tolist() if info is not None else [])}
             df_cols = set(df.columns)
             needs_recreate = False
             if not table_cols:
@@ -67,28 +68,51 @@ def load_dataframe(
                     f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load"
                 )
                 rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+                from contextlib import suppress
+
+                with suppress(Exception):
+                    set_last_import(table, len(df), md_token=md_token, md_database=md_database)
                 return (
                     f"Recreated table {table} from schema and loaded {len(df)} rows; indexes rebuilt"
                 )
             # Column set matches; preserve table types
-            target_cols = [str(x) for x in info["name"].tolist()]
+            target_cols = list(df.columns) if info is None else [str(x) for x in info["name"].tolist()]
             for c in target_cols:
                 if c not in df.columns:
                     df[c] = None
             con.unregister("df_to_load")
             con.register("df_to_load", df[target_cols])
-            con.execute(f"DELETE FROM {quote_ident(table)}")
             cols = ", ".join(quote_ident(c) for c in target_cols)
-            con.execute(
-                f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load"
-            )
+            # Try to delete existing rows for a full-replace while preserving schema.
+            # Some MotherDuck internal errors may occur on DELETE; in that case fallback to
+            # a CREATE OR REPLACE TABLE AS SELECT ... which replaces the table atomically.
+            try:
+                con.execute(f"DELETE FROM {quote_ident(table)}")
+                con.execute(
+                    f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load"
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Fallback: attempt CTAS replace. If this also fails, re-raise the original exception
+                try:
+                    con.execute(f"CREATE OR REPLACE TABLE {quote_ident(table)} AS SELECT {cols} FROM df_to_load")
+                except Exception:
+                    # Re-raise original exception to preserve root cause for debugging
+                    raise exc from None
             rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+            from contextlib import suppress
+
+            with suppress(Exception):
+                set_last_import(table, len(df), md_token=md_token, md_database=md_database)
             return f"Replaced table {table} with {len(df)} rows and rebuilt indexes"
 
         if replace:
             # Fallback: replace table via CTAS
             con.execute(f"CREATE OR REPLACE TABLE {quote_ident(table)} AS SELECT * FROM df_to_load")
             rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+            from contextlib import suppress
+
+            with suppress(Exception):
+                set_last_import(table, len(df), md_token=md_token, md_database=md_database)
             return f"Replaced table {table} with {len(df)} rows and rebuilt indexes"
 
         # else: create if not exists then insert
@@ -96,6 +120,10 @@ def load_dataframe(
         con.execute(f"CREATE TABLE IF NOT EXISTS {quote_ident(table)} AS SELECT * FROM df_to_load WHERE 1=0")
         con.execute(f"INSERT INTO {quote_ident(table)} ({cols}) SELECT {cols} FROM df_to_load")
         rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+        from contextlib import suppress
+
+        with suppress(Exception):
+            set_last_import(table, len(df), md_token=md_token, md_database=md_database)
         return f"Inserted {len(df)} rows into {table} and ensured indexes"
 
 
@@ -162,6 +190,17 @@ def load_dataframe_partitioned(
             raise
 
         rebuild_indexes(md_token=md_token, md_database=md_database, table=table)
+        from contextlib import suppress
+
+        with suppress(Exception):
+            # record last import; include partition in notes
+            set_last_import(
+                table,
+                len(df),
+                notes=f"partition={partition_field}={partition_value}",
+                md_token=md_token,
+                md_database=md_database,
+            )
         return (
             f"Replaced partition where {partition_field}={partition_value!r} in {table}; indexes rebuilt"
         )

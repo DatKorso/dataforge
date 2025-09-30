@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import streamlit as st
@@ -28,6 +28,7 @@ from dataforge.imports.google_sheets import (
     read_csv_first_sheet as gs_read_csv,
 )
 from dataforge.imports.loader import load_dataframe, load_dataframe_partitioned
+from dataforge.imports.metadata import get_all_imports, get_last_import
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
@@ -53,6 +54,35 @@ spec: ReportSpec = REGISTRY[report_id]
 
 st.info(spec.description)
 
+# Show last successful import time for non-punta reports
+try:
+    if not report_id.startswith("punta_"):
+        def _sget(key: str) -> str | None:
+            try:
+                return st.secrets[key]  # type: ignore[index]
+            except Exception:
+                return None
+
+        md_token = st.session_state.get("md_token") or _sget("md_token")
+        md_database = st.session_state.get("md_database") or _sget("md_database")
+        last = get_last_import(spec.table, md_token=md_token, md_database=md_database)
+        if last and last.get("last_loaded_at"):
+            st.caption(
+                f"Последняя успешная загрузка: {last['last_loaded_at']} (строк: {last.get('rows_loaded')})"
+            )
+        else:
+            st.caption("Информация о последней загрузке отсутствует")
+        # Also fetch a compact summary table for all reports' last imports.
+        # Rendering will happen later after _arrow_safe is defined.
+        preview_imports_rows = None
+        try:
+            preview_imports_rows = get_all_imports(md_token=md_token, md_database=md_database)
+        except Exception:
+            preview_imports_rows = None
+except Exception:
+    # non-critical UI enhancement; swallow errors
+    pass
+
 # Define _arrow_safe early so it can be used in all branches
 def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
     """Sanitize a DataFrame to avoid Arrow serialization issues in Streamlit.
@@ -69,7 +99,7 @@ def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
             def _to_str(x: Any) -> Any:
                 if x is None or (isinstance(x, float) and pd.isna(x)):
                     return None
-                if isinstance(x, (bytes, bytearray)):
+                if isinstance(x, bytes | bytearray):
                     try:
                         return x.decode("utf-8", errors="replace")
                     except Exception:
@@ -81,13 +111,26 @@ def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = s.map(_to_str)
     return out
 
+# Render the imports summary (fetched earlier) after _arrow_safe is defined
+try:
+    if "preview_imports_rows" in locals() and preview_imports_rows:
+        df_rows = pd.DataFrame(preview_imports_rows)
+        # Exclude punta tables and show most recent first
+        df_rows = df_rows[~df_rows["table_name"].str.startswith("punta_")]
+        if not df_rows.empty:
+            df_rows = df_rows.sort_values("last_loaded_at", ascending=False)
+            st.subheader("Последние загрузки по отчётам")
+            st.dataframe(_arrow_safe(df_rows.head(50)), width="stretch")
+except Exception:
+    pass
+
 
 def _select_barcode(raw: Any, prefer_last: bool = False) -> str | None:
     """Pick first/last non-empty barcode from JSON text or iterable."""
     if raw in (None, ""):
         return None
 
-    if isinstance(raw, (list, tuple)):
+    if isinstance(raw, list | tuple):
         candidates = list(raw)
     else:
         candidates: list[Any]
@@ -280,28 +323,26 @@ MAX_SIZE = 200 * 1024 * 1024  # 200MB
 
 preview_col, import_col = st.columns([1, 1])
 
-has_input = False
-if report_id == "punta_google":
-    has_input = bool(gs_url)
-else:
-    if spec.multi_file:
-        has_input = isinstance(uploaded, list) and len(uploaded) > 0
-    else:
-        has_input = uploaded is not None
+has_input = bool(gs_url) if report_id == "punta_google" else (isinstance(uploaded, list) and len(uploaded) > 0 if spec.multi_file else uploaded is not None)
 
 if has_input and report_id != "punta_google":
     size = getattr(uploaded, "size", None)
     if spec.multi_file:
-        total_size = sum(getattr(f, "size", 0) or 0 for f in uploaded)
+        files = uploaded if isinstance(uploaded, list) else [uploaded] if uploaded is not None else []
+        total_size = sum(getattr(f, "size", 0) or 0 for f in files)
         if total_size > MAX_SIZE:
             st.error("Суммарный размер файлов слишком большой. Максимум 200MB.")
         else:
-            st.write(f"Выбрано файлов: {len(uploaded)}; суммарно {total_size} байт")
+            st.write(f"Выбрано файлов: {len(files)}; суммарно {total_size} байт")
     else:
         if size and size > MAX_SIZE:
             st.error("Файл слишком большой. Максимальный размер 200MB.")
         else:
-            st.write(f"Файл: {uploaded.name} — {size or 0} байт")
+            single_file = uploaded if not isinstance(uploaded, list) else (uploaded[0] if uploaded else None)
+            if single_file is None:
+                st.error("Файл не найден")
+                st.stop()
+            st.write(f"Файл: {single_file.name} — {size or 0} байт")
 
     with preview_col:
         if st.button("Предпросмотр и валидация", type="primary"):
@@ -309,21 +350,26 @@ if has_input and report_id != "punta_google":
                 if spec.assembler:
                     with st.spinner("Сбор данных из файла(ов)..."):
                         if spec.assembler == "ozon_products_full":
-                            df_src = assemble_ozon_products_full(uploaded)
+                            files = uploaded if isinstance(uploaded, list) else [uploaded]
+                            df_src = assemble_ozon_products_full(files)
                         elif spec.assembler == "wb_products":
-                            df_src = assemble_wb_products(uploaded)
+                            files = uploaded if isinstance(uploaded, list) else [uploaded]
+                            df_src = assemble_wb_products(files)
                         elif spec.assembler == "wb_prices":
                             files = uploaded if isinstance(uploaded, list) else [uploaded]
                             df_src = assemble_wb_prices(files)
                         else:
                             raise ValueError(f"Неизвестный сборщик для отчёта: {spec.assembler}")
                 else:
-                    ext = _ext_from_name(uploaded.name)
+                    single_file = uploaded if not isinstance(uploaded, list) else (uploaded[0] if uploaded else None)
+                    if single_file is None:
+                        raise ValueError("Нет файла для чтения")
+                    ext = _ext_from_name(single_file.name)
                     delimiter = _delimiter_value(delim_label)
                     enc = None if encoding == "auto" else encoding
                     with st.spinner("Чтение файла..."):
                         df_src = read_any(
-                            uploaded, ext, delimiter=delimiter, encoding=enc, header_row=int(header_row) - 1
+                            single_file, ext, delimiter=delimiter, encoding=enc, header_row=int(header_row) - 1
                         )
 
                 # Подстановка значения коллекции для отчёта Punta
@@ -489,7 +535,7 @@ elif report_id == "punta_google":
         if st.button("Предпросмотр", type="primary", disabled=not gs_url):
             try:
                 with st.spinner("Чтение Google Sheets как CSV..."):
-                    df_src = gs_read_csv(gs_url)
+                    df_src = gs_read_csv(cast(str, gs_url))
                 # Дедупликация по wb_sku (оставляем первое вхождение)
                 df_src = gs_dedup(df_src)
 
