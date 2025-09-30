@@ -20,9 +20,10 @@ def calculate_margin_percentage(
     """Расчет процента маржинальности по формуле.
 
     Формула:
-    margin_percentage = (((oz_price/(1+VAT) -
-                          (oz_price*((Commission+Acquiring+Advertising)/100))/1.2) /
-                          ExchangeRate) - cost_price_usd) / cost_price_usd * 100
+    margin_percentage = (((oz_price/(1+VAT)
+                          - (oz_price*((Commission+Acquiring+Advertising)/100)) / (1+VAT))
+                          / ExchangeRate)
+                         - cost_price_usd) / cost_price_usd * 100
 
     Args:
         oz_price: Цена Ozon в рублях (current_price)
@@ -42,10 +43,10 @@ def calculate_margin_percentage(
     # Шаг 1: Цена без НДС
     price_after_vat = oz_price / (1 + vat_percent / 100)
 
-    # Шаг 2-3: Сумма комиссий с коэффициентом 1.2
+    # Шаг 2-3: Сумма комиссий с коэффициентом (1 + vat)
     total_fees_percent = commission_percent + acquiring_percent + advertising_percent
     fees_amount = oz_price * (total_fees_percent / 100)
-    fees_adjusted = fees_amount / 1.2
+    fees_adjusted = fees_amount / (1 + vat_percent / 100)
 
     # Шаг 4: Чистая выручка в рублях
     net_price_rub = price_after_vat - fees_adjusted
@@ -132,147 +133,170 @@ def select_campaign_candidates(
         results: list[CandidateResult] = []
         group_number = 0
 
+        # 0) Проверяем существование таблиц один раз (вне цикла)
+        pg_exists = (
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_google'"
+            ).fetchone()[0]
+            > 0
+        )
+        pb_exists = (
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_barcodes'"
+            ).fetchone()[0]
+            > 0
+        )
+        ppc_exists = (
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_products_codes'"
+            ).fetchone()[0]
+            > 0
+        )
+
+        # 1) Собираем все матчинги разом, а затем батчим запрос по товарам
+        matches_by_wb: dict[str, list[dict]] = {}
+        external_code_by_oz_all: dict[str, str] = {}
+        all_oz_skus: list[str] = []
         for wb_sku in wb_skus:
-            # 1. Получаем кандидатов OZ через matching
             matches = find_oz_by_wb(wb_sku, limit=None, con=con)
+            if not matches:
+                matches_by_wb[wb_sku] = []
+                continue
+            matches_by_wb[wb_sku] = matches
+            for m in matches:
+                oz = m.get("oz_sku")
+                if oz:
+                    all_oz_skus.append(str(oz))
+                    ext = m.get("punta_external_code_oz")
+                    if ext:
+                        external_code_by_oz_all.setdefault(str(oz), str(ext))
+
+        if not all_oz_skus:
+            return []
+
+        # 2) Единый запрос по всем oz_sku
+        placeholders = ",".join(["?"] * len(all_oz_skus))
+        punta_prod_join = ""
+        punta_prod_select = ""
+        if pb_exists and ppc_exists:
+            punta_prod_join = (
+                "\n                LEFT JOIN punta_barcodes pb ON pb.barcode = p.\"barcode-primary\"\n"
+                "                LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code\n"
+            )
+            punta_prod_select = ", ppc.cost_usd"
+
+        query = f"""
+        WITH orders_14d AS (
+            SELECT
+                oz_vendor_code,
+                COALESCE(SUM(quantity), 0) AS total_orders
+            FROM oz_orders
+            WHERE processing_date >= CURRENT_DATE - INTERVAL 14 DAYS
+            GROUP BY oz_vendor_code
+        )
+        SELECT
+            p.oz_sku,
+            p.oz_vendor_code,
+            COALESCE(p.fbo_available, 0) AS fbo_available,
+            COALESCE(o.total_orders, 0) AS total_orders,
+            p.current_price AS oz_price
+            {punta_prod_select}
+        FROM oz_products p
+        LEFT JOIN orders_14d o ON p.oz_vendor_code = o.oz_vendor_code
+        {punta_prod_join}
+        WHERE p.oz_sku IN ({placeholders})
+        """
+
+        df_all = con.execute(query, all_oz_skus).fetch_df()
+
+        if "cost_usd" not in df_all.columns:
+            df_all["cost_usd"] = pd.NA
+
+        # 3) Загружаем себестоимости по external_code (единоразово)
+        cost_by_external: dict[str, float | None] = {}
+        if ppc_exists and external_code_by_oz_all:
+            external_codes = sorted(set(external_code_by_oz_all.values()))
+            placeholders_ext = ",".join(["?"] * len(external_codes))
+            cost_df = con.execute(
+                f"SELECT external_code, cost_usd FROM punta_products_codes WHERE external_code IN ({placeholders_ext})",
+                external_codes,
+            ).fetch_df()
+            for _, cost_row in cost_df.iterrows():
+                ext_code = str(cost_row["external_code"])
+                value = float(cost_row["cost_usd"]) if pd.notna(cost_row["cost_usd"]) else None
+                cost_by_external[ext_code] = value
+
+        # 4) Загружаем характеристики из punta_google по wb_sku (без небезопасных f-string)
+        pg_map: dict[str, dict[str, str | None]] = {}
+        if pg_exists:
+            placeholders_wb = ",".join(["?"] * len(wb_skus))
+            pg_df = con.execute(
+                f"SELECT wb_sku, gender, season, material_short, item_type FROM punta_google WHERE wb_sku IN ({placeholders_wb})",
+                wb_skus,
+            ).fetch_df()
+            for _, r in pg_df.iterrows():
+                key = str(r["wb_sku"]) if pd.notna(r["wb_sku"]) else None
+                if key is None:
+                    continue
+                pg_map[key] = {
+                    "gender": str(r["gender"]) if pd.notna(r["gender"]) else None,
+                    "season": str(r["season"]) if pd.notna(r["season"]) else None,
+                    "material_short": str(r["material_short"]) if pd.notna(r["material_short"]) else None,
+                    "item_type": str(r["item_type"]) if pd.notna(r["item_type"]) else None,
+                }
+
+        # 5) Обрабатываем группы по исходным wb_sku
+        for wb_sku in wb_skus:
+            matches = matches_by_wb.get(wb_sku) or []
             if not matches:
                 continue
 
-            # Собираем oz_sku для запроса (oz_sku = BIGINT артикул Ozon)
-            oz_skus = [m["oz_sku"] for m in matches if m.get("oz_sku")]
-            if not oz_skus:
+            oz_skus_group = [m.get("oz_sku") for m in matches if m.get("oz_sku")]
+            if not oz_skus_group:
                 continue
 
-            # Подготовим карту external_code, если matcher его вернул
-            external_code_by_oz: dict[str, str] = {}
-            for match in matches:
-                oz_sku_match = match.get("oz_sku")
-                external_code = match.get("punta_external_code_oz")
-                if oz_sku_match and external_code:
-                    key = str(oz_sku_match)
-                    external_code_by_oz.setdefault(key, str(external_code))
+            # Фильтруем общий датафрейм по sku группы
+            try:
+                oz_skus_group_int = {int(str(x)) for x in oz_skus_group}
+                df_g = df_all[df_all["oz_sku"].astype(int).isin(oz_skus_group_int)].copy()
+            except Exception:
+                # На случай неожиданного типа `oz_sku` — используем строковое сравнение
+                df_g = df_all[df_all["oz_sku"].astype(str).isin([str(x) for x in oz_skus_group])].copy()
 
-            # 2. Получаем данные о товарах: остатки + заказы + цена + себестоимость + punta_google
-            # JOIN с punta_google по wb_sku для получения характеристик
-            # JOIN с punta_products_codes по "barcode-primary" → punta_barcodes → external_code для получения себестоимости
-            placeholders = ",".join(["?"] * len(oz_skus))
-
-            # Проверяем существование таблиц punta_google, punta_barcodes и punta_products_codes
-            pg_exists = con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_google'"
-            ).fetchone()[0] > 0
-
-            pb_exists = con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_barcodes'"
-            ).fetchone()[0] > 0
-
-            ppc_exists = con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_products_codes'"
-            ).fetchone()[0] > 0
-
-            punta_join = ""
-            punta_select = ""
-            if pg_exists:
-                # Используем литерал вместо параметра для wb_sku в JOIN
-                punta_join = f"LEFT JOIN punta_google pg ON pg.wb_sku = '{wb_sku}'"
-                punta_select = """
-                    , pg.gender
-                    , pg.season
-                    , pg.material_short
-                    , pg.item_type
-                """
-
-            # JOIN с punta_products_codes для получения себестоимости через "barcode-primary" → punta_barcodes → external_code
-            punta_prod_join = ""
-            punta_prod_select = ""
-            if pb_exists and ppc_exists:
-                punta_prod_join = """
-                LEFT JOIN punta_barcodes pb ON pb.barcode = p."barcode-primary"
-                LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
-                """
-                punta_prod_select = ", ppc.cost_usd"
-
-            query = f"""
-            WITH orders_14d AS (
-                SELECT
-                    oz_vendor_code,
-                    COALESCE(SUM(quantity), 0) AS total_orders
-                FROM oz_orders
-                WHERE processing_date >= CURRENT_DATE - INTERVAL 14 DAYS
-                GROUP BY oz_vendor_code
-            )
-            SELECT
-                p.oz_sku,
-                p.oz_vendor_code,
-                COALESCE(p.fbo_available, 0) AS fbo_available,
-                COALESCE(o.total_orders, 0) AS total_orders,
-                p.current_price AS oz_price
-                {punta_select}
-                {punta_prod_select}
-            FROM oz_products p
-            LEFT JOIN orders_14d o ON p.oz_vendor_code = o.oz_vendor_code
-            {punta_join}
-            {punta_prod_join}
-            WHERE p.oz_sku IN ({placeholders})
-            """
-
-            df = con.execute(query, oz_skus).fetch_df()
-
-            if df.empty:
+            if df_g.empty:
                 continue
 
-            # Добавляем себестоимость по external_code, если matcher предоставил данные
-            if "cost_usd" not in df.columns:
-                df["cost_usd"] = pd.NA
+            # Сортировка: по заказам, затем по остаткам
+            df_g = df_g.sort_values(by=["total_orders", "fbo_available"], ascending=[False, False]).reset_index(drop=True)
 
-            cost_by_external: dict[str, float | None] = {}
-            external_codes = sorted({code for code in external_code_by_oz.values() if code})
-            if ppc_exists and external_codes:
-                placeholders_ext = ",".join(["?"] * len(external_codes))
-                cost_df = con.execute(
-                    f"SELECT external_code, cost_usd FROM punta_products_codes WHERE external_code IN ({placeholders_ext})",
-                    external_codes,
-                ).fetch_df()
-                for _, cost_row in cost_df.iterrows():
-                    ext_code = str(cost_row["external_code"])
-                    value = float(cost_row["cost_usd"]) if pd.notna(cost_row["cost_usd"]) else None
-                    cost_by_external[ext_code] = value
-
-            if external_code_by_oz:
-                oz_sku_str = df["oz_sku"].astype(str)
-                matched_codes = oz_sku_str.map(external_code_by_oz)
-                if cost_by_external:
-                    cost_from_match = matched_codes.map(cost_by_external)
-                    df["cost_usd"] = cost_from_match.combine_first(df["cost_usd"])
-
-            # 3. Сортировка: сначала по заказам (DESC), затем по остаткам (DESC)
-            df = df.sort_values(
-                by=["total_orders", "fbo_available"],
-                ascending=[False, False]
-            ).reset_index(drop=True)
-
-            # 4. Фильтрация по min_stock
-            df_filtered = df[df["fbo_available"] >= min_stock].copy()
-
-            # Проверка min_candidates
+            # Фильтрация по min_stock
+            df_filtered = df_g[df_g["fbo_available"] >= min_stock].copy()
             if len(df_filtered) < min_candidates:
-                continue  # Пропускаем группу
+                continue
 
             # Ограничение max_candidates
             df_selected = df_filtered.head(max_candidates)
 
-            # 5. Расчёт агрегатов на уровне модели (для всех товаров группы, не только выбранных)
-            model_stock = int(df["fbo_available"].sum())
-            model_orders = int(df["total_orders"].sum())
+            # Агрегаты по модели (по всем товарам группы)
+            model_stock = int(df_g["fbo_available"].sum())
+            model_orders = int(df_g["total_orders"].sum())
 
-            # 6. Формируем результаты с расчётом маржинальности
+            # Данные из punta_google для wb_sku
+            pg_row = pg_map.get(str(wb_sku), {}) if pg_exists else {}
+
+            # Формируем результаты
             group_number += 1
             for _, row in df_selected.iterrows():
-                # Извлекаем цену и себестоимость
-                oz_price = float(row["oz_price"]) if "oz_price" in row and pd.notna(row["oz_price"]) else None
-                cost_usd = float(row["cost_usd"]) if "cost_usd" in row and pd.notna(row["cost_usd"]) else None
+                oz_price = float(row["oz_price"]) if pd.notna(row.get("oz_price")) else None
 
-                # Рассчитываем маржу
+                # Себестоимость из запроса или по external_code из matching
+                cost_usd: float | None
+                if pd.notna(row.get("cost_usd")):
+                    cost_usd = float(row.get("cost_usd"))
+                else:
+                    ext_code = external_code_by_oz_all.get(str(row["oz_sku"]))
+                    cost_usd = cost_by_external.get(ext_code) if ext_code else None
+
                 margin_percent = None
                 if oz_price is not None and cost_usd is not None and oz_price > 0 and cost_usd > 0:
                     margin_percent = calculate_margin_percentage(
@@ -288,13 +312,13 @@ def select_campaign_candidates(
                 results.append(
                     CandidateResult(
                         group_number=group_number,
-                        wb_sku=wb_sku,
+                        wb_sku=str(wb_sku),
                         oz_sku=str(row["oz_sku"]) if pd.notna(row["oz_sku"]) else "",
                         oz_vendor_code=str(row["oz_vendor_code"]),
-                        gender=str(row["gender"]) if "gender" in row and pd.notna(row["gender"]) else None,
-                        season=str(row["season"]) if "season" in row and pd.notna(row["season"]) else None,
-                        material_short=str(row["material_short"]) if "material_short" in row and pd.notna(row["material_short"]) else None,
-                        item_type=str(row["item_type"]) if "item_type" in row and pd.notna(row["item_type"]) else None,
+                        gender=(pg_row.get("gender") if pg_row else None),
+                        season=(pg_row.get("season") if pg_row else None),
+                        material_short=(pg_row.get("material_short") if pg_row else None),
+                        item_type=(pg_row.get("item_type") if pg_row else None),
                         size_stock=int(row["fbo_available"]),
                         model_stock=model_stock,
                         size_orders=int(row["total_orders"]),

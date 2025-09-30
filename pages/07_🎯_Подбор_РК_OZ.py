@@ -15,10 +15,10 @@ st.caption(
 
 
 def _sget(key: str) -> str | None:
-    """Получить значение из secrets с обработкой ошибок."""
+    """Получить значение из secrets с обработкой отсутствия ключа."""
     try:
         return st.secrets[key]  # type: ignore[index]
-    except Exception:
+    except KeyError:
         return None
 
 
@@ -47,12 +47,19 @@ margin_defaults = {
 
 
 def _get_margin_setting(key: str) -> float:
-    """Получить настройку маржи из session_state или secrets."""
-    return float(
-        st.session_state.get(key)
-        or _sget(key)
-        or margin_defaults[key]
-    )
+    """Получить настройку маржи из session_state или secrets, различая 0.0 и отсутствие значения."""
+    if key in st.session_state:
+        try:
+            return float(st.session_state[key])
+        except Exception:
+            pass
+    val = _sget(key)
+    if val is not None:
+        try:
+            return float(val)
+        except Exception:
+            pass
+    return float(margin_defaults[key])
 
 
 commission_percent = _get_margin_setting("commission_percent")

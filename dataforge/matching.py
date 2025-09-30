@@ -628,9 +628,7 @@ def _matches_for_external_codes(
            , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
     """
 
-    punta_joins = r"""
-        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)
-        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)
+    punta_joins = r"""\
     """
 
     sql_head = r"""
@@ -742,15 +740,26 @@ def _matches_for_external_codes(
     ORDER BY r.input_external_code, r.match_score DESC, r.oz_sku, r.wb_sku
     """
 
-    joined_sql = joined_sql.replace(
-        "FROM matched AS m",
-        punta_select + "        FROM matched AS m",
-    ).replace(
-        "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode",
-        "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode\n      " + punta_joins,
+    joined_sql = (
+        joined_sql.replace(
+            "FROM matched AS m",
+            punta_select + "        FROM matched AS m",
+        )
+        .replace(
+            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode",
+            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.barcode, o.oz_primary_barcode)",
+        )
+        .replace(
+            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode",
+            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.barcode, w.wb_primary_barcode)",
+        )
     )
 
-    sql = punta_cte + joined_sql
+    # Корректно объединяем CTE: добавляем punta_cte перед блоком sql_head
+    head = sql_head.lstrip()
+    if head.startswith("WITH "):
+        head = head[len("WITH ") :]
+    sql = "WITH " + punta_cte + ",\n" + head + joined_sql
 
     if limit_per_code is None or int(limit_per_code) <= 0:
         params = [None, 0]
