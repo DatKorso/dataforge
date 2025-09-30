@@ -40,9 +40,7 @@ with st.expander("Создать коллекцию", expanded=False):
     with col_a:
         if st.button("Создать") and new_name.strip():
             try:
-                name, pr = ensure_punta_collection(
-                    new_name.strip(), md_token=md_token, md_database=md_database
-                )
+                name, pr = ensure_punta_collection(new_name.strip(), md_token=md_token, md_database=md_database)
                 st.success(f"Создано: {name} (приоритет {pr})")
                 _refresh()
             except Exception as exc:  # noqa: BLE001
@@ -74,9 +72,7 @@ except Exception:
     used_drag = False
 
 if not used_drag:
-    st.caption(
-        "Компонент drag‑n‑drop недоступен. Редактируйте приоритеты вручную и сохраните порядок."
-    )
+    st.caption("Компонент drag‑n‑drop недоступен. Редактируйте приоритеты вручную и сохраните порядок.")
     editable = df[["collection", "priority"]].copy()
     editable = st.data_editor(
         editable,
@@ -101,4 +97,3 @@ with col_save:
 with col_refresh:
     if st.button("Обновить список"):
         _refresh()
-

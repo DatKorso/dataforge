@@ -36,6 +36,31 @@ if not md_token:
     st.warning("⚠️ MD токен не найден. Укажите его на странице Настройки.")
     st.stop()
 
+# Загрузка настроек маржинальности
+margin_defaults = {
+    "commission_percent": 36.0,
+    "acquiring_percent": 0.0,
+    "advertising_percent": 3.0,
+    "vat_percent": 20.0,
+    "exchange_rate": 90.0,
+}
+
+
+def _get_margin_setting(key: str) -> float:
+    """Получить настройку маржи из session_state или secrets."""
+    return float(
+        st.session_state.get(key)
+        or _sget(key)
+        or margin_defaults[key]
+    )
+
+
+commission_percent = _get_margin_setting("commission_percent")
+acquiring_percent = _get_margin_setting("acquiring_percent")
+advertising_percent = _get_margin_setting("advertising_percent")
+vat_percent = _get_margin_setting("vat_percent")
+exchange_rate = _get_margin_setting("exchange_rate")
+
 # --- Форма ввода параметров ---
 st.subheader("📝 Параметры подбора")
 
@@ -87,6 +112,11 @@ if search_btn:
                     min_stock=min_stock,
                     min_candidates=min_candidates,
                     max_candidates=max_candidates,
+                    commission_percent=commission_percent,
+                    acquiring_percent=acquiring_percent,
+                    advertising_percent=advertising_percent,
+                    vat_percent=vat_percent,
+                    exchange_rate=exchange_rate,
                     md_token=md_token,
                     md_database=md_database,
                 )
@@ -101,12 +131,47 @@ if search_btn:
                             "wb_sku": "Артикул WB",
                             "oz_sku": "Артикул OZ",
                             "oz_vendor_code": "Артикул поставщика OZ",
+                            "gender": "Пол",
+                            "season": "Сезон",
+                            "material_short": "Материал",
+                            "item_type": "Категория",
                             "size_stock": "Остаток размера",
                             "model_stock": "Остаток модели",
                             "size_orders": "Заказы размера (14д)",
                             "model_orders": "Заказы модели (14д)",
+                            "oz_price": "Цена OZ (₽)",
+                            "cost_usd": "Себест-ть ($)",
+                            "margin_percent": "Маржа (%)",
                         }
                     )
+
+                    # Порядок колонок: маржа в конце
+                    column_order = [
+                        "№ группы",
+                        "Артикул WB",
+                        "Артикул OZ",
+                        "Артикул поставщика OZ",
+                        "Пол",
+                        "Сезон",
+                        "Материал",
+                        "Категория",
+                        "Остаток размера",
+                        "Остаток модели",
+                        "Заказы размера (14д)",
+                        "Заказы модели (14д)",
+                        "Цена OZ (₽)",
+                        "Себест-ть ($)",
+                        "Маржа (%)",
+                    ]
+                    # Оставляем только колонки, которые реально есть в df_display
+                    column_order = [col for col in column_order if col in df_display.columns]
+                    df_display = df_display[column_order]
+
+                    # Форматирование маржи с 2 знаками после запятой
+                    if "Маржа (%)" in df_display.columns:
+                        df_display["Маржа (%)"] = df_display["Маржа (%)"].apply(
+                            lambda x: f"{x:.2f}" if pd.notna(x) else "—"
+                        )
 
                     # Информация о результатах
                     unique_groups = df["group_number"].nunique()

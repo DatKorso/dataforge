@@ -17,7 +17,9 @@ def mock_db():
         CREATE TABLE oz_products (
             oz_sku BIGINT,
             oz_vendor_code VARCHAR,
-            fbo_available INTEGER
+            fbo_available INTEGER,
+            current_price DECIMAL(10,2),
+            "barcode-primary" VARCHAR
         )
     """)
 
@@ -29,15 +31,42 @@ def mock_db():
         )
     """)
 
-    # Вставить тестовые данные oz_products
+    # Создать таблицу punta_google (опциональная, динамическая схема)
+    con.execute("""
+        CREATE TABLE punta_google (
+            wb_sku VARCHAR,
+            gender VARCHAR,
+            season VARCHAR,
+            material_short VARCHAR,
+            item_type VARCHAR
+        )
+    """)
+
+    # Создать таблицу punta_barcodes (связь barcode → external_code)
+    con.execute("""
+        CREATE TABLE punta_barcodes (
+            barcode VARCHAR,
+            external_code VARCHAR
+        )
+    """)
+
+    # Создать таблицу punta_products_codes для себестоимости (через external_code)
+    con.execute("""
+        CREATE TABLE punta_products_codes (
+            external_code VARCHAR,
+            cost_usd DECIMAL(10,2)
+        )
+    """)
+
+    # Вставить тестовые данные oz_products (с ценами и штрихкодами)
     con.execute("""
         INSERT INTO oz_products VALUES
-        (1001, 'OZ-SIZE-1', 10),
-        (1002, 'OZ-SIZE-2', 20),
-        (1003, 'OZ-SIZE-3', 5),
-        (1004, 'OZ-SIZE-4', 2),
-        (2001, 'OZ-SIZE-5', 15),
-        (2002, 'OZ-SIZE-6', 8)
+        (1001, 'OZ-SIZE-1', 10, 1200.00, 'BARCODE-1'),
+        (1002, 'OZ-SIZE-2', 20, 1500.00, 'BARCODE-2'),
+        (1003, 'OZ-SIZE-3', 5, 900.00, 'BARCODE-3'),
+        (1004, 'OZ-SIZE-4', 2, 800.00, 'BARCODE-4'),
+        (2001, 'OZ-SIZE-5', 15, 2000.00, 'BARCODE-5'),
+        (2002, 'OZ-SIZE-6', 8, 1800.00, 'BARCODE-6')
     """)
 
     # Вставить тестовые данные oz_orders (за последние 14 дней)
@@ -61,6 +90,36 @@ def mock_db():
             "OZ-SIZE-6", today - timedelta(days=4), 10,
         ],
     )
+
+    # Вставить тестовые данные punta_google
+    con.execute("""
+        INSERT INTO punta_google VALUES
+        ('WB-123', 'Мужской', 'Зима', 'Хлопок', 'Футболка'),
+        ('WB-GROUP-1', 'Женский', 'Лето', 'Шелк', 'Платье'),
+        ('WB-GROUP-2', 'Унисекс', 'Всесезонный', 'Полиэстер', 'Куртка')
+    """)
+
+    # Вставить тестовые данные punta_barcodes (связь barcode → external_code)
+    con.execute("""
+        INSERT INTO punta_barcodes VALUES
+        ('BARCODE-1', 'EXT-CODE-1'),
+        ('BARCODE-2', 'EXT-CODE-2'),
+        ('BARCODE-3', 'EXT-CODE-3'),
+        ('BARCODE-4', 'EXT-CODE-4'),
+        ('BARCODE-5', 'EXT-CODE-5'),
+        ('BARCODE-6', 'EXT-CODE-6')
+    """)
+
+    # Вставить тестовые данные punta_products_codes (себестоимость через external_code)
+    con.execute("""
+        INSERT INTO punta_products_codes VALUES
+        ('EXT-CODE-1', 5.00),
+        ('EXT-CODE-2', 6.00),
+        ('EXT-CODE-3', 4.00),
+        ('EXT-CODE-4', 3.50),
+        ('EXT-CODE-5', 8.00),
+        ('EXT-CODE-6', 7.00)
+    """)
 
     yield con
     con.close()

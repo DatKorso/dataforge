@@ -120,6 +120,110 @@ with cols2[1]:
             st.write(f"• {m}")
 
 st.divider()
+st.subheader("Настройки маржинальности")
+st.caption(
+    "Параметры для расчета маржи в подборе кандидатов РК. "
+    "Используются для расчета чистой прибыли после всех комиссий и НДС."
+)
+
+# Загрузить текущие значения
+margin_defaults = {
+    "commission_percent": 36.0,
+    "acquiring_percent": 0.0,
+    "advertising_percent": 3.0,
+    "vat_percent": 20.0,
+    "exchange_rate": 90.0,
+}
+
+margin_cols = st.columns(3)
+with margin_cols[0]:
+    commission = st.number_input(
+        "Комиссия Ozon (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(
+            st.session_state.get("commission_percent")
+            or _secret_from_streamlit("commission_percent")
+            or existing.get("commission_percent", margin_defaults["commission_percent"])
+        ),
+        step=0.1,
+        help="Процент комиссии маркетплейса Ozon",
+    )
+    acquiring = st.number_input(
+        "Эквайринг (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(
+            st.session_state.get("acquiring_percent")
+            or _secret_from_streamlit("acquiring_percent")
+            or existing.get("acquiring_percent", margin_defaults["acquiring_percent"])
+        ),
+        step=0.1,
+        help="Процент эквайринга (обработка платежей)",
+    )
+
+with margin_cols[1]:
+    advertising = st.number_input(
+        "Реклама (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(
+            st.session_state.get("advertising_percent")
+            or _secret_from_streamlit("advertising_percent")
+            or existing.get("advertising_percent", margin_defaults["advertising_percent"])
+        ),
+        step=0.1,
+        help="Процент затрат на рекламу",
+    )
+    vat = st.number_input(
+        "НДС (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(
+            st.session_state.get("vat_percent")
+            or _secret_from_streamlit("vat_percent")
+            or existing.get("vat_percent", margin_defaults["vat_percent"])
+        ),
+        step=0.1,
+        help="Налог на добавленную стоимость",
+    )
+
+with margin_cols[2]:
+    exchange_rate = st.number_input(
+        "Курс USD/RUB",
+        min_value=1.0,
+        max_value=200.0,
+        value=float(
+            st.session_state.get("exchange_rate")
+            or _secret_from_streamlit("exchange_rate")
+            or existing.get("exchange_rate", margin_defaults["exchange_rate"])
+        ),
+        step=0.1,
+        help="Курс конвертации доллара к рублю",
+    )
+
+if st.button("Сохранить настройки маржи"):
+    save_secrets(
+        {
+            "commission_percent": commission,
+            "acquiring_percent": acquiring,
+            "advertising_percent": advertising,
+            "vat_percent": vat,
+            "exchange_rate": exchange_rate,
+        }
+    )
+    st.session_state.update(
+        {
+            "commission_percent": commission,
+            "acquiring_percent": acquiring,
+            "advertising_percent": advertising,
+            "vat_percent": vat,
+            "exchange_rate": exchange_rate,
+        }
+    )
+    st.success("Настройки маржинальности сохранены в .streamlit/secrets.toml")
+
+st.divider()
 st.subheader("Punta")
 st.caption("Ручное обновление нормализованной связки external_code ↔ продукты Punta.")
 
