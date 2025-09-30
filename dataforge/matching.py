@@ -1,21 +1,51 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TypedDict
+from dataclasses import dataclass
 
 import duckdb
 import pandas as pd
 from dataforge.db import get_connection
+from dataforge.matching_query import MatchesQuery
 
 
-class Match(TypedDict):
+@dataclass
+class Match:
     oz_sku: str | None
     wb_sku: str | None
     barcode_hit: str
     matched_by: str  # 'primary↔primary' | 'primary↔any' | 'any↔primary' | 'any↔any'
     match_score: int
-    confidence_note: str | None
-    punta_external_code_oz: str | None
+    confidence_note: str | None = None
+    punta_external_code_oz: str | None = None
+
+    @staticmethod
+    def from_row(r: pd.Series) -> Match:
+        return Match(
+            oz_sku=str(r.get("oz_sku")) if pd.notna(r.get("oz_sku")) else None,
+            wb_sku=str(r.get("wb_sku")) if pd.notna(r.get("wb_sku")) else None,
+            barcode_hit=str(r.get("barcode_hit")),
+            matched_by=str(r.get("matched_by")),
+            match_score=int(r.get("match_score") or 0),
+            confidence_note=None,
+            punta_external_code_oz=(
+                str(r.get("punta_external_code_oz"))
+                if pd.notna(r.get("punta_external_code_oz"))
+                else None
+            ),
+        )
+
+    def __getitem__(self, key: str):
+        """Allow dict-style access like the previous TypedDict (e.g. m['wb_sku']).
+
+        Raises KeyError for unknown keys to mimic mapping behavior.
+        """
+        if hasattr(self, key):
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
 
 
 def _normalize_barcodes(barcodes: Iterable[str]) -> list[str]:
@@ -56,6 +86,21 @@ def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
         return False
 
 
+def _run_matches_query(
+    con: duckdb.DuckDBPyConnection,
+    sql: str,
+    params: list | None = None,
+) -> pd.DataFrame:
+    """Central execute helper: runs given SQL with params and returns DataFrame.
+
+    This encapsulates the single place where `execute(...).fetch_df()` is called so
+    callers can be simplified and behavior is consistent.
+    """
+    if params is None:
+        params = [None, 0]
+    return con.execute(sql, params).fetch_df()
+
+
 def _matches_for_oz_skus(
     oz_skus: list[str],
     limit_per_input: int | None = None,
@@ -79,28 +124,7 @@ def _matches_for_oz_skus(
 
     punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
 
-    punta_cte = r"""
-    punta_map AS (
-        SELECT pb.barcode,
-               pb.external_code,
-               ppc.collection
-        FROM punta_barcodes pb
-        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
-    )
-    """ if punta_enabled else ""
-
-    punta_select = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-    """ if punta_enabled else ""
-
-    punta_joins = r"""
-    LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
-    LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
-    """ if punta_enabled else ""
+    # punta fragments are injected by MatchesQuery.assemble when needed
 
     sql_head = r"""
     WITH inp AS (
@@ -215,33 +239,10 @@ def _matches_for_oz_skus(
     ORDER BY r.oz_sku, r.match_score DESC, r.wb_sku
     """
 
-    if punta_enabled:
-        sql_mid = ",\n    " + punta_cte + "\n"
-        joined_enrich = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-        """
-        joined_sql = joined_sql.replace(
-            "FROM oz_barcodes AS o",
-            joined_enrich + "        FROM oz_barcodes AS o",
-        )
-        joined_sql = joined_sql.replace(
-            "JOIN wb_barcodes AS w ON w.barcode = o.barcode",
-            "JOIN wb_barcodes AS w ON w.barcode = o.barcode\n          " + punta_joins,
-        )
-        sql = sql_head + sql_mid + joined_sql
-    else:
-        sql = sql_head + joined_sql
+    sql = MatchesQuery.assemble(sql_head, joined_sql, "oz", punta_enabled)
 
-    if limit_per_input is None or int(limit_per_input) <= 0:
-        params = [None, 0]
-    else:
-        params = [int(limit_per_input), int(limit_per_input)]
-    df = local_con.execute(sql, params).fetch_df()
-    return df
+    params = [None, 0] if limit_per_input is None or int(limit_per_input) <= 0 else [int(limit_per_input), int(limit_per_input)]
+    return _run_matches_query(local_con, sql, params)
 
 
 def _matches_for_wb_skus(
@@ -260,28 +261,7 @@ def _matches_for_wb_skus(
 
     punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
 
-    punta_cte = r"""
-    punta_map AS (
-        SELECT pb.barcode,
-               pb.external_code,
-               ppc.collection
-        FROM punta_barcodes pb
-        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
-    )
-    """ if punta_enabled else ""
-
-    punta_select = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-    """ if punta_enabled else ""
-
-    punta_joins = r"""
-    LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
-    LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
-    """ if punta_enabled else ""
+    # punta fragments are injected by MatchesQuery.assemble when needed
 
     sql_head = r"""
     WITH inp AS (
@@ -382,33 +362,10 @@ def _matches_for_wb_skus(
     ORDER BY r.wb_sku, r.match_score DESC, r.oz_sku
     """
 
-    if punta_enabled:
-        sql_mid = ",\n    " + punta_cte + "\n"
-        joined_enrich = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-        """
-        joined_sql = joined_sql.replace(
-            "FROM wb_barcodes AS w",
-            joined_enrich + "        FROM wb_barcodes AS w",
-        )
-        joined_sql = joined_sql.replace(
-            "JOIN oz_barcodes AS o ON o.barcode = w.barcode",
-            "JOIN oz_barcodes AS o ON o.barcode = w.barcode\n          " + punta_joins,
-        )
-        sql = sql_head + sql_mid + joined_sql
-    else:
-        sql = sql_head + joined_sql
+    sql = MatchesQuery.assemble(sql_head, joined_sql, "wb", punta_enabled)
 
-    if limit_per_input is None or int(limit_per_input) <= 0:
-        params = [None, 0]
-    else:
-        params = [int(limit_per_input), int(limit_per_input)]
-    df = local_con.execute(sql, params).fetch_df()
-    return df
+    params = [None, 0] if limit_per_input is None or int(limit_per_input) <= 0 else [int(limit_per_input), int(limit_per_input)]
+    return _run_matches_query(local_con, sql, params)
 
 
 def _matches_for_barcodes(
@@ -428,28 +385,7 @@ def _matches_for_barcodes(
 
     punta_enabled = _table_exists(local_con, "punta_barcodes") and _table_exists(local_con, "punta_products_codes")
 
-    punta_cte = r"""
-    punta_map AS (
-        SELECT pb.barcode,
-               pb.external_code,
-               ppc.collection
-        FROM punta_barcodes pb
-        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
-    )
-    """ if punta_enabled else ""
-
-    punta_select = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-    """ if punta_enabled else ""
-
-    punta_joins = r"""
-        LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)
-        LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)
-    """ if punta_enabled else ""
+    # punta fragments are injected by MatchesQuery.assemble when needed
 
     sql_head = r"""
     WITH inp AS (
@@ -549,41 +485,10 @@ def _matches_for_barcodes(
     ORDER BY r.input_barcode, r.match_score DESC, r.oz_sku, r.wb_sku
     """
 
-    if punta_enabled:
-        # Build the punta CTE injection and insert punta-related selected columns
-        sql_mid = ",\n    " + punta_cte + "\n"
-        joined_enrich = r"""
-               , pm_oz.collection AS punta_collection_oz
-               , pm_oz.external_code AS punta_external_code_oz
-               , pm_wb.collection AS punta_collection_wb
-               , pm_wb.external_code AS punta_external_code_wb
-               , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-        """
-        # Insert punta selected columns after the FROM clause
-        joined_sql = joined_sql.replace(
-            "FROM inp AS i",
-            joined_enrich + "        FROM inp AS i",
-        )
-        # Insert pm_oz join immediately after the oz_barcodes join
-        joined_sql = joined_sql.replace(
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = i.barcode",
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = i.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)",
-        )
-        # Insert pm_wb join immediately after the wb_barcodes join (separately)
-        joined_sql = joined_sql.replace(
-            "LEFT JOIN wb_barcodes AS w ON w.barcode = i.barcode",
-            "LEFT JOIN wb_barcodes AS w ON w.barcode = i.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)",
-        )
-        sql = sql_head + sql_mid + joined_sql
-    else:
-        sql = sql_head + joined_sql
+    sql = MatchesQuery.assemble(sql_head, joined_sql, "barcode", punta_enabled)
 
-    if limit_per_barcode is None or int(limit_per_barcode) <= 0:
-        params = [None, 0]
-    else:
-        params = [int(limit_per_barcode), int(limit_per_barcode)]
-    df = local_con.execute(sql, params).fetch_df()
-    return df
+    params = [None, 0] if limit_per_barcode is None or int(limit_per_barcode) <= 0 else [int(limit_per_barcode), int(limit_per_barcode)]
+    return _run_matches_query(local_con, sql, params)
 
 
 def _matches_for_external_codes(
@@ -612,32 +517,7 @@ def _matches_for_external_codes(
     df_inp = pd.DataFrame({"external_code": external_codes})
     local_con.register("inputs", df_inp)
 
-    punta_cte = r"""
-    punta_map AS (
-        SELECT pb.external_code,
-               pb.barcode,
-               ppc.collection
-        FROM punta_barcodes pb
-        LEFT JOIN punta_products_codes ppc ON ppc.external_code = pb.external_code
-    ),
-    ext_barcodes AS (
-        SELECT DISTINCT TRIM(external_code) AS external_code,
-               barcode
-        FROM punta_map
-        WHERE TRIM(external_code) <> ''
-    )
-    """
-
-    punta_select = r"""
-           , pm_oz.collection AS punta_collection_oz
-           , pm_oz.external_code AS punta_external_code_oz
-           , pm_wb.collection AS punta_collection_wb
-           , pm_wb.external_code AS punta_external_code_wb
-           , (pm_oz.external_code = pm_wb.external_code) AS punta_external_equal
-    """
-
-    punta_joins = r"""\
-    """
+    # punta fragments are injected by MatchesQuery.assemble when needed
 
     sql_head = r"""
     WITH inp AS (
@@ -748,33 +628,10 @@ def _matches_for_external_codes(
     ORDER BY r.input_external_code, r.match_score DESC, r.oz_sku, r.wb_sku
     """
 
-    joined_sql = (
-        joined_sql.replace(
-            "FROM matched AS m",
-            punta_select + "        FROM matched AS m",
-        )
-            .replace(
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode",
-            "LEFT JOIN oz_barcodes AS o ON o.barcode = m.barcode\n          LEFT JOIN punta_map pm_oz ON pm_oz.barcode = COALESCE(o.oz_primary_barcode, o.barcode)",
-        )
-        .replace(
-            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode",
-            "LEFT JOIN wb_barcodes AS w ON w.barcode = m.barcode\n          LEFT JOIN punta_map pm_wb ON pm_wb.barcode = COALESCE(w.wb_primary_barcode, w.barcode)",
-        )
-    )
+    sql = MatchesQuery.assemble(sql_head, joined_sql, "external", True)
 
-    # Корректно объединяем CTE: добавляем punta_cte перед блоком sql_head
-    head = sql_head.lstrip()
-    if head.startswith("WITH "):
-        head = head[len("WITH ") :]
-    sql = "WITH " + punta_cte + ",\n" + head + joined_sql
-
-    if limit_per_code is None or int(limit_per_code) <= 0:
-        params = [None, 0]
-    else:
-        params = [int(limit_per_code), int(limit_per_code)]
-    df = local_con.execute(sql, params).fetch_df()
-    return df
+    params = [None, 0] if limit_per_code is None or int(limit_per_code) <= 0 else [int(limit_per_code), int(limit_per_code)]
+    return _run_matches_query(local_con, sql, params)
 
 
 def find_wb_by_oz(
@@ -797,21 +654,7 @@ def find_wb_by_oz(
     )
     out: list[Match] = []
     for _, r in df.iterrows():
-        out.append(
-            Match(
-                oz_sku=str(r.get("oz_sku")) if pd.notna(r.get("oz_sku")) else None,
-                wb_sku=str(r.get("wb_sku")) if pd.notna(r.get("wb_sku")) else None,
-                barcode_hit=str(r.get("barcode_hit")),
-                matched_by=str(r.get("matched_by")),
-                match_score=int(r.get("match_score") or 0),
-                confidence_note=None,
-                punta_external_code_oz=(
-                    str(r.get("punta_external_code_oz"))
-                    if pd.notna(r.get("punta_external_code_oz"))
-                    else None
-                ),
-            )
-        )
+        out.append(Match.from_row(r))
     return out
 
 
@@ -835,21 +678,7 @@ def find_oz_by_wb(
     )
     out: list[Match] = []
     for _, r in df.iterrows():
-        out.append(
-            Match(
-                oz_sku=str(r.get("oz_sku")) if pd.notna(r.get("oz_sku")) else None,
-                wb_sku=str(r.get("wb_sku")) if pd.notna(r.get("wb_sku")) else None,
-                barcode_hit=str(r.get("barcode_hit")),
-                matched_by=str(r.get("matched_by")),
-                match_score=int(r.get("match_score") or 0),
-                confidence_note=None,
-                punta_external_code_oz=(
-                    str(r.get("punta_external_code_oz"))
-                    if pd.notna(r.get("punta_external_code_oz"))
-                    else None
-                ),
-            )
-        )
+        out.append(Match.from_row(r))
     return out
 
 
@@ -874,21 +703,7 @@ def find_by_barcodes(
     )
     out: list[Match] = []
     for _, r in df.iterrows():
-        out.append(
-            Match(
-                oz_sku=str(r.get("oz_sku")) if pd.notna(r.get("oz_sku")) else None,
-                wb_sku=str(r.get("wb_sku")) if pd.notna(r.get("wb_sku")) else None,
-                barcode_hit=str(r.get("barcode_hit")),
-                matched_by=str(r.get("matched_by")),
-                match_score=int(r.get("match_score") or 0),
-                confidence_note=None,
-                punta_external_code_oz=(
-                    str(r.get("punta_external_code_oz"))
-                    if pd.notna(r.get("punta_external_code_oz"))
-                    else None
-                ),
-            )
-        )
+        out.append(Match.from_row(r))
     return out
 
 
