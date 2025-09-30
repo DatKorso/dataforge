@@ -64,6 +64,8 @@ with cols[0]:
         st.session_state["md_database"] = md_database
         st.success("Секреты сохранены в .streamlit/secrets.toml")
 
+    # ...existing code...
+
 with cols[1]:
     if st.button("Проверить подключение"):
         with st.spinner("Проверка подключения к MotherDuck..."):

@@ -30,13 +30,37 @@ if not md_token:
     st.warning("MD токен не найден. Укажите его на странице Настройки.")
     st.stop()
 
+# Diagnostic: show where md_database/md_token come from and current_database()
+cols_dbg = st.columns([2, 1])
+with cols_dbg[0]:
+    st.caption(f"Effective md_database: {md_database!s}  (session overrides secrets)")
+with cols_dbg[1]:
+    if st.button("Refresh PRAGMA"):
+        # Clear cached PRAGMA call and rerun to fetch fresh data
+        clear_fn = getattr(globals().get("load_database_size"), "clear", None)
+        if callable(clear_fn):
+            clear_fn()
+        rerun = getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
+
 
 @st.cache_data(ttl=60)
 def load_database_size(
     *, md_token: str | None, md_database: str | None
 ) -> pd.DataFrame:
     with get_connection(md_token=md_token, md_database=md_database) as con:
-        return con.execute("PRAGMA database_size;").fetch_df()
+        # Also attach current_database() as a quick check
+        # PRAGMA database_size returns a single-row table; we'll return it as-is
+        df = con.execute("PRAGMA database_size;").fetch_df()
+        try:
+            cur = con.execute("select current_database() as current_db").fetch_df()
+            if not cur.empty:
+                df["current_database"] = cur.loc[0, "current_db"]
+        except Exception:
+            # ignore — optional diagnostic only
+            pass
+        return df
 
 
 def friendly_label(key: str) -> str:
