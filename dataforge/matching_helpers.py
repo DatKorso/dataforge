@@ -64,6 +64,7 @@ def add_merge_fields(
     """Add merge helper fields to a DataFrame in-place and return it.
 
     Adds columns:
+    - group_number (int) - sequential group number starting from 1
     - merge_code
     - merge_wb_hex
     - merge_color
@@ -109,6 +110,13 @@ def add_merge_fields(
     df["merge_color"] = colors
     df["merge_parse_ok"] = parse_ok
     df["merge_fallback_hex"] = fallback_flags
+    
+    # Add group_number based on unique merge_code
+    # Sort merge_codes to ensure consistent numbering
+    unique_merge_codes = sorted(df["merge_code"].unique())
+    merge_code_to_group = {code: idx + 1 for idx, code in enumerate(unique_merge_codes)}
+    df["group_number"] = df["merge_code"].map(merge_code_to_group)
+    
     return df
 
 
@@ -127,7 +135,7 @@ def dedupe_sizes(df, input_type: str) -> pd.DataFrame:
         size_col = "wb_size"
         group_cols = ["wb_sku", size_col]
     elif input_type in ("oz_sku", "oz_vendor_code"):
-        size_col = "oz_russian_size"
+        size_col = "oz_manufacturer_size"
         group_cols = ["oz_sku", size_col]
     else:
         return df

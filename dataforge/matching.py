@@ -144,7 +144,7 @@ def _matches_for_oz_skus(
                json_extract_string(j.value, '$') AS barcode,
                CASE WHEN json_extract_string(j.value, '$') = f.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
                f.primary_barcode AS oz_primary_barcode,
-               f.russian_size AS oz_russian_size,
+               f.russian_size AS oz_manufacturer_size,
                f.product_name AS oz_product_name,
                f.brand AS oz_brand,
                f.color AS oz_color
@@ -159,7 +159,7 @@ def _matches_for_oz_skus(
                b.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                b.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_russian_size,
+               NULL::VARCHAR AS oz_manufacturer_size,
                NULL::VARCHAR AS oz_product_name,
                NULL::VARCHAR AS oz_brand,
                NULL::VARCHAR AS oz_color
@@ -173,7 +173,7 @@ def _matches_for_oz_skus(
     ),
     oz_barcodes AS (
         SELECT DISTINCT oz_sku, oz_vendor_code, barcode, is_primary,
-                        oz_primary_barcode, oz_russian_size, oz_product_name, oz_brand, oz_color
+                        oz_primary_barcode, oz_manufacturer_size, oz_product_name, oz_brand, oz_color
         FROM (
             SELECT * FROM oz_full_barcodes
             UNION ALL
@@ -206,7 +206,7 @@ def _matches_for_oz_skus(
                o.is_primary AS oz_is_primary_hit,
                w.is_primary AS wb_is_primary_hit,
                o.oz_primary_barcode,
-               o.oz_russian_size,
+               o.oz_manufacturer_size,
                o.oz_product_name,
                o.oz_brand,
                o.oz_color,
@@ -292,7 +292,7 @@ def _matches_for_wb_skus(
                json_extract_string(j.value, '$') AS barcode,
                CASE WHEN json_extract_string(j.value, '$') = f.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
                f.primary_barcode AS oz_primary_barcode,
-               f.russian_size AS oz_russian_size,
+               f.russian_size AS oz_manufacturer_size,
                f.product_name AS oz_product_name,
                f.brand AS oz_brand,
                f.color AS oz_color
@@ -305,7 +305,7 @@ def _matches_for_wb_skus(
                o.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_russian_size,
+               NULL::VARCHAR AS oz_manufacturer_size,
                NULL::VARCHAR AS oz_product_name,
                NULL::VARCHAR AS oz_brand,
                NULL::VARCHAR AS oz_color
@@ -329,7 +329,7 @@ def _matches_for_wb_skus(
                o.is_primary AS oz_is_primary_hit,
                w.is_primary AS wb_is_primary_hit,
                o.oz_primary_barcode,
-               o.oz_russian_size,
+               o.oz_manufacturer_size,
                o.oz_product_name,
                o.oz_brand,
                o.oz_color,
@@ -403,7 +403,7 @@ def _matches_for_barcodes(
                json_extract_string(j.value, '$') AS barcode,
                CASE WHEN json_extract_string(j.value, '$') = f.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
                f.primary_barcode AS oz_primary_barcode,
-               f.russian_size AS oz_russian_size,
+               f.russian_size AS oz_manufacturer_size,
                f.product_name AS oz_product_name,
                f.brand AS oz_brand,
                f.color AS oz_color
@@ -413,7 +413,7 @@ def _matches_for_barcodes(
         UNION ALL
         SELECT o.oz_vendor_code, o.oz_sku, o.oz_barcode_primary AS barcode, TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_russian_size,
+               NULL::VARCHAR AS oz_manufacturer_size,
                NULL::VARCHAR AS oz_product_name,
                NULL::VARCHAR AS oz_brand,
                NULL::VARCHAR AS oz_color
@@ -450,7 +450,7 @@ def _matches_for_barcodes(
                o.is_primary AS oz_is_primary_hit,
                w.is_primary AS wb_is_primary_hit,
                o.oz_primary_barcode,
-               o.oz_russian_size,
+               o.oz_manufacturer_size,
                o.oz_product_name,
                o.oz_brand,
                o.oz_color,
@@ -543,7 +543,7 @@ def _matches_for_external_codes(
                json_extract_string(j.value, '$') AS barcode,
                CASE WHEN json_extract_string(j.value, '$') = f.primary_barcode THEN TRUE ELSE FALSE END AS is_primary,
                f.primary_barcode AS oz_primary_barcode,
-               f.russian_size AS oz_russian_size,
+               f.russian_size AS oz_manufacturer_size,
                f.product_name AS oz_product_name,
                f.brand AS oz_brand,
                f.color AS oz_color
@@ -556,7 +556,7 @@ def _matches_for_external_codes(
                o.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_russian_size,
+               NULL::VARCHAR AS oz_manufacturer_size,
                NULL::VARCHAR AS oz_product_name,
                NULL::VARCHAR AS oz_brand,
                NULL::VARCHAR AS oz_color
@@ -593,7 +593,7 @@ def _matches_for_external_codes(
                o.is_primary AS oz_is_primary_hit,
                w.is_primary AS wb_is_primary_hit,
                o.oz_primary_barcode,
-               o.oz_russian_size,
+               o.oz_manufacturer_size,
                o.oz_product_name,
                o.oz_brand,
                o.oz_color,
@@ -753,6 +753,13 @@ def search_matches(
         return _matches_for_oz_skus(ozs, limit_per_input=limit_per_input, con=con, md_token=md_token, md_database=md_database)
 
     raise ValueError(f"Unknown input_type: {input_type}")
+
+
+# --- Similarity (wb_similarity) algorithm implementation ---
+try:  # реэкспорт для обратной совместимости старых импортов
+    from dataforge.similarity_matching import search_similar_matches  # type: ignore # noqa: E402,F401
+except Exception:  # pragma: no cover
+    pass
 
 
 def rebuild_barcode_index() -> None:  # placeholder for future precompute

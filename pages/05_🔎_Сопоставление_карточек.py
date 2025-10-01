@@ -71,7 +71,7 @@ def _dedupe_sizes(df: pd.DataFrame, input_type: str) -> pd.DataFrame:
 
     Rules:
     - If input_type is 'wb_sku': keep unique wb_size within each wb_sku
-    - If input_type is 'oz_sku' or 'oz_vendor_code': keep unique oz_russian_size within each oz_sku
+    - If input_type is 'oz_sku' or 'oz_vendor_code': keep unique oz_manufacturer_size within each oz_sku
     - Otherwise (e.g., barcode), leave as is
     """
     if df.empty:
@@ -81,7 +81,7 @@ def _dedupe_sizes(df: pd.DataFrame, input_type: str) -> pd.DataFrame:
         size_col = "wb_size"
         group_cols = ["wb_sku", size_col]
     elif input_type in ("oz_sku", "oz_vendor_code"):
-        size_col = "oz_russian_size"
+        size_col = "oz_manufacturer_size"
         group_cols = ["oz_sku", size_col]
     else:
         return df
@@ -131,7 +131,7 @@ ALL_COLUMNS = [
     "oz_sku",
     "oz_vendor_code",
     "oz_product_name",
-    "oz_russian_size",
+    "oz_manufacturer_size",
     "oz_brand",
     "oz_color",
     "oz_primary_barcode",
