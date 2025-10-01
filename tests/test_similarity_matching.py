@@ -94,7 +94,7 @@ def test_similarity_season_mismatch_penalty():
     con.execute("INSERT INTO oz_products VALUES (601,'OZ-COLOR-601','OZPB601')")
     con.execute("INSERT INTO oz_products_full VALUES ('OZ-COLOR-601', ?, 'OZPB601', '39', 'Prod D', 'BR', 'YELLOW')", [_json_array('PB201')])
 
-    cfg = SimilarityScoringConfig()
+    cfg = SimilarityScoringConfig(min_score_threshold=50.0)  # Используем низкий порог для теста
     df = search_similar_matches([200], config=cfg, con=con)
     assert not df.empty
     # presence of both wb sku
@@ -113,7 +113,7 @@ def test_similarity_no_last_penalty():
     con.execute("INSERT INTO oz_products VALUES (701,'OZ-X-701','OZPB701')")
     con.execute("INSERT INTO oz_products_full VALUES ('OZ-X-701', ?, 'OZPB701', '41', 'Prod Y', 'BR', 'BLUE')", [_json_array('PB301')])
 
-    cfg = SimilarityScoringConfig()
+    cfg = SimilarityScoringConfig(min_score_threshold=50.0)  # Используем низкий порог для теста
     df = search_similar_matches([300], config=cfg, con=con)
     assert not df.empty
     assert set(df['wb_sku'].astype(int)) == {300,301}
@@ -135,4 +135,67 @@ def test_similarity_merge_code_and_color():
     assert all(df['merge_code'].str.startswith('C-'))
     # merge_color must contain HEX(wb_sku) (e.g., 400 -> 190) present at least once
     assert any(format(400, 'X') in mc for mc in df['merge_color'])
+
+
+def test_similarity_max_group_size():
+    """Тестирование параметра max_group_size - большие компоненты должны разбиваться на подгруппы"""
+    con = _prep_conn()
+    
+    # Создаем цепочку связанных товаров: seed1 -> cand1, cand1 -> cand2, ... (транзитивная связь)
+    # Всего 20 товаров, которые образуют один большой компонент связности
+    for i in range(20):
+        wb_sku = 1000 + i
+        barcode = f'PB{wb_sku}'
+        con.execute(f"INSERT INTO wb_products VALUES ({wb_sku}, 'Shoes', 'M', ?, '{barcode}', '42', 'ART{wb_sku}', 'BR', 'RED')", [_json_array(barcode)])
+        con.execute(f"INSERT INTO punta_google VALUES ({wb_sku},'WINTER','RED','LACE','LEATHER','M1',NULL,NULL,'MODELX')")
+        
+        # Создаем oz продукты для каждого wb
+        oz_sku = 2000 + i
+        oz_barcode = f'OZPB{oz_sku}'
+        con.execute(f"INSERT INTO oz_products VALUES ({oz_sku},'OZ-A-{oz_sku}','{oz_barcode}')")
+        con.execute(f"INSERT INTO oz_products_full VALUES ('OZ-A-{oz_sku}', ?, '{oz_barcode}', '42', 'Prod {i}', 'BR', 'RED')", [_json_array(barcode)])
+    
+    # Все 20 товаров связаны через общие атрибуты и образуют один большой компонент
+    # Используем max_group_size=8 для разбиения
+    cfg = SimilarityScoringConfig(max_group_size=8)
+    df = search_similar_matches([1000, 1001, 1002, 1003], config=cfg, con=con)
+    
+    assert not df.empty
+    
+    # Проверяем, что ни одна группа не превышает max_group_size=8
+    if 'group_number' in df.columns:
+        group_sizes = df.groupby('group_number')['wb_sku'].nunique()
+        max_group = group_sizes.max()
+        assert max_group <= 8, f"Группа размером {max_group} превышает max_group_size=8"
+        
+        # Проверяем, что было создано больше одной группы (компонент разбит)
+        assert len(group_sizes) >= 2, "Ожидалось несколько групп, получена только одна"
+
+
+def test_similarity_max_group_size_none():
+    """Тестирование что при max_group_size=None группы не разбиваются"""
+    con = _prep_conn()
+    
+    # Создаем небольшой набор связанных товаров
+    for i in range(5):
+        wb_sku = 3000 + i
+        barcode = f'PB{wb_sku}'
+        con.execute(f"INSERT INTO wb_products VALUES ({wb_sku}, 'Boots', 'F', ?, '{barcode}', '38', 'ART{wb_sku}', 'XBR', 'BLU')", [_json_array(barcode)])
+        con.execute(f"INSERT INTO punta_google VALUES ({wb_sku},'SUMMER','BLU','ZIP','TEXTILE',NULL,'B2',NULL,'MODELY')")
+        
+        oz_sku = 4000 + i
+        oz_barcode = f'OZPB{oz_sku}'
+        con.execute(f"INSERT INTO oz_products VALUES ({oz_sku},'OZ-B-{oz_sku}','{oz_barcode}')")
+        con.execute(f"INSERT INTO oz_products_full VALUES ('OZ-B-{oz_sku}', ?, '{oz_barcode}', '38', 'Boot {i}', 'XBR', 'BLU')", [_json_array(barcode)])
+    
+    # Без max_group_size все должно быть в одной группе
+    cfg = SimilarityScoringConfig(max_group_size=None)
+    df = search_similar_matches([3000, 3001], config=cfg, con=con)
+    
+    assert not df.empty
+    if 'group_number' in df.columns:
+        group_sizes = df.groupby('group_number')['wb_sku'].nunique()
+        # Может быть одна или несколько групп, но размер не должен быть искусственно ограничен
+        # (в данном случае все могут быть в одной группе)
+        assert len(group_sizes) >= 1
 

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import dataclass, field
 
 import pandas as pd
 import streamlit as st
 from dataforge.matching import search_matches
-from dataforge.similarity_matching import search_similar_matches  # новый прямой импорт
 from dataforge.matching_helpers import add_merge_fields
+from dataforge.similarity_matching import search_similar_matches  # новый прямой импорт
 from dataforge.ui import setup_page
-import math
 
 setup_page(title="DataForge — Склейка OZ", icon="🧩")
 
@@ -78,17 +78,25 @@ with st.form(key="oz_merge_form"):
             "min_score_threshold",
             min_value=0.0,
             max_value=1000.0,
-            value=float(st.session_state.get("oz_merge_min_score", 50.0)),
+            value=float(st.session_state.get("oz_merge_min_score", 300.0)),
             key="oz_merge_min_score",
             help="Порог отсечения кандидатов по итоговому скору",
         )
         st.number_input(
-            "max_recommendations",
+            "max_candidates_per_seed",
             min_value=1,
             max_value=100,
-            value=int(st.session_state.get("oz_merge_max_rec", 10)),
+            value=int(st.session_state.get("oz_merge_max_rec", 30)),
             key="oz_merge_max_rec",
             help="Максимум кандидатов на исходный WB SKU",
+        )
+        st.number_input(
+            "max_group_size",
+            min_value=0,
+            max_value=500,
+            value=int(st.session_state.get("oz_merge_max_group_size", 10)),
+            key="oz_merge_max_group_size",
+            help="Максимальный размер группы (0 = без ограничения). Большие компоненты будут разбиты на подгруппы.",
         )
 
     st.text_area(
@@ -127,9 +135,11 @@ if submitted:
     try:
         if merge_algo[1] == "wb_similarity":
             from dataforge.similarity_config import SimilarityScoringConfig
+            max_group_size_val = int(st.session_state.get("oz_merge_max_group_size", 15))
             cfg = SimilarityScoringConfig(
                 min_score_threshold=float(st.session_state.get("oz_merge_min_score", 50.0)),
-                max_recommendations=int(st.session_state.get("oz_merge_max_rec", 10)),
+                max_candidates_per_seed=int(st.session_state.get("oz_merge_max_rec", 10)),
+                max_group_size=max_group_size_val if max_group_size_val > 0 else None,
             )
             
             # Batch processing with progress
@@ -201,11 +211,66 @@ if submitted:
             
             # Check for missing wb_sku
             df_similarity = st.session_state["oz_merge_result"]
-            found_wb = set(str(x) for x in df_similarity.get("wb_sku", [])) if not df_similarity.empty else set()
+            found_wb = {str(x) for x in df_similarity.get("wb_sku", [])} if not df_similarity.empty else set()
             missing = [v for v in values if v not in found_wb]
             st.session_state["oz_merge_missing_wb"] = missing
+            
+            # Fallback: запускаем базовый алгоритм для не найденных товаров
             if missing:
-                st.warning(f"Не найдены в wb_products: {', '.join(missing[:50])}{' ...' if len(missing)>50 else ''}")
+                st.info(f"📋 Не найдены похожие товары для {len(missing)} wb_sku. Запускаем базовый алгоритм для создания одиночных групп...")
+                try:
+                    with st.spinner(f"Обработка {len(missing)} товаров базовым алгоритмом..."):
+                        df_fallback = search_matches(
+                            missing,
+                            input_type="wb_sku",
+                            limit_per_input=None,
+                            md_token=md_token,
+                            md_database=md_database,
+                        )
+                        
+                        if not df_fallback.empty:
+                            # Apply defect filter
+                            if st.session_state.get("oz_merge_filter_no_defect", True) and "oz_vendor_code" in df_fallback.columns:
+                                starts_with_brak = df_fallback["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
+                                df_fallback = df_fallback.loc[~starts_with_brak]
+                            
+                            # Add merge fields
+                            if not df_fallback.empty and "oz_vendor_code" in df_fallback.columns:
+                                df_fallback = add_merge_fields(df_fallback, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+                            
+                            # Dedupe sizes
+                            if st.session_state.get("oz_merge_filter_unique_sizes", True) and not df_fallback.empty:
+                                from dataforge.matching_helpers import dedupe_sizes
+                                df_fallback = dedupe_sizes(df_fallback, input_type="wb_sku")
+                            
+                            # Adjust group numbers to not overlap with similarity groups
+                            if not df_fallback.empty and "group_number" in df_fallback.columns:
+                                if "group_number" in df_similarity.columns and not df_similarity.empty:
+                                    max_existing = df_similarity["group_number"].max()
+                                    max_existing_group = int(max_existing) if pd.notna(max_existing) else 0
+                                else:
+                                    max_existing_group = 0
+                                df_fallback["group_number"] = df_fallback["group_number"] + max_existing_group
+                            
+                            # Add similarity_score column (0 for fallback items)
+                            if "similarity_score" not in df_fallback.columns:
+                                df_fallback["similarity_score"] = 0.0
+                            
+                            # Merge with main results
+                            st.session_state["oz_merge_result"] = pd.concat([df_similarity, df_fallback], ignore_index=True)
+                            st.success(f"✅ Добавлено {len(df_fallback)} строк из базового алгоритма")
+                except Exception as e:
+                    st.error(f"❌ Ошибка при выполнении fallback алгоритма: {e}")
+                    # Продолжаем с результатами similarity, не прерывая работу
+                
+                # Update missing list after fallback
+                df_final = st.session_state["oz_merge_result"]
+                found_wb_final = {str(x) for x in df_final.get("wb_sku", [])} if not df_final.empty else set()
+                missing_final = [v for v in values if v not in found_wb_final]
+                st.session_state["oz_merge_missing_wb"] = missing_final
+                
+                if missing_final:
+                    st.warning(f"⚠️ Не найдены в wb_products даже после базового алгоритма: {', '.join(missing_final[:50])}{' ...' if len(missing_final)>50 else ''}")
         else:
             # Batch processing with progress
             batch_size = int(st.session_state.get("oz_merge_batch_size", 1000))

@@ -1,11 +1,100 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
-import pandas as pd
-import duckdb
 
+import duckdb
+import pandas as pd
+from dataforge.matching import _ensure_connection, _matches_for_wb_skus, _table_exists  # type: ignore
 from dataforge.similarity_config import SimilarityScoringConfig
-from dataforge.matching import _ensure_connection, _table_exists, _matches_for_wb_skus  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+
+def _split_large_component(
+    component: set[int],
+    pairs_df: pd.DataFrame,
+    max_size: int,
+) -> list[set[int]]:
+    """Разбивает большой компонент на подгруппы с учетом скоринга.
+    
+    Использует жадный алгоритм:
+    1. Берем элемент с максимальным суммарным скором связей
+    2. Добавляем к нему наиболее связанные элементы до достижения max_size
+    3. Повторяем для оставшихся элементов
+    
+    Args:
+        component: Множество wb_sku для разбиения
+        pairs_df: DataFrame с парами (seed_wb_sku, cand_wb_sku, final_score)
+        max_size: Максимальный размер подгруппы
+        
+    Returns:
+        Список подгрупп (множеств wb_sku)
+    """
+    if len(component) <= max_size:
+        return [component]
+    
+    # Edge case: пустой компонент
+    if not component:
+        return []
+    
+    # Строим граф связей с весами (скорами)
+    edges: dict[tuple[int, int], float] = {}
+    for _, row in pairs_df.iterrows():
+        a, b = int(row.seed_wb_sku), int(row.cand_wb_sku)
+        if a in component and b in component:
+            key = (min(a, b), max(a, b))
+            edges[key] = max(edges.get(key, 0.0), float(row.final_score))
+    
+    # Считаем суммарный скор для каждого узла
+    node_scores: dict[int, float] = dict.fromkeys(component, 0.0)
+    for (a, b), score in edges.items():
+        node_scores[a] += score
+        node_scores[b] += score
+    
+    remaining = component.copy()
+    subgroups: list[set[int]] = []
+    
+    while remaining:
+        # Начинаем новую группу с узла с максимальным скором
+        seed = max(remaining, key=lambda n: node_scores.get(n, 0.0))
+        current_group = {seed}
+        remaining.remove(seed)
+        
+        # Кэшируем связи текущей группы для оптимизации
+        group_connections: dict[int, float] = {}
+        for node in remaining:
+            key = (min(seed, node), max(seed, node))
+            group_connections[node] = edges.get(key, 0.0)
+        
+        # Добавляем наиболее связанные элементы
+        while len(current_group) < max_size and remaining:
+            # Находим узел с максимальной связью с текущей группой
+            best_candidate = None
+            best_score = -1.0
+            
+            for candidate in remaining:
+                score_sum = group_connections.get(candidate, 0.0)
+                
+                if score_sum > best_score:
+                    best_score = score_sum
+                    best_candidate = candidate
+            
+            if best_candidate is None or best_score <= 0:
+                # Нет больше связанных узлов, начинаем новую группу
+                break
+            
+            current_group.add(best_candidate)
+            remaining.remove(best_candidate)
+            
+            # Обновляем кэш для оставшихся узлов
+            for node in remaining:
+                key = (min(best_candidate, node), max(best_candidate, node))
+                group_connections[node] = group_connections.get(node, 0.0) + edges.get(key, 0.0)
+        
+        subgroups.append(current_group)
+    
+    return subgroups
 
 
 def search_similar_matches(
@@ -80,9 +169,12 @@ def search_similar_matches(
     # Construct dynamic CTE parts for punta_google
     punta_ctes = ''
     punta_left_joins = ''
+    material_filter = ''
     if punta_exists:
         punta_ctes = ", pg_seed AS (SELECT wb_sku, season, color, lacing_type, material_short, mega_last, best_last, new_last, model_name FROM punta_google), pg_cand AS (SELECT wb_sku, season, color, lacing_type, material_short, mega_last, best_last, new_last, model_name FROM punta_google)"
         punta_left_joins = "LEFT JOIN pg_seed ON pg_seed.wb_sku = s.seed_wb_sku LEFT JOIN pg_cand ON pg_cand.wb_sku = c.cand_wb_sku"
+        # ТРЕБОВАНИЕ: material_short должен точно совпадать, иначе товар не является кандидатом
+        material_filter = "WHERE (pg_seed.material_short IS NULL OR pg_cand.material_short IS NULL OR pg_seed.material_short = pg_cand.material_short)"
 
     sql = f"""
     WITH seed AS (
@@ -111,6 +203,7 @@ def search_similar_matches(
         FROM candidates c
         JOIN seed_enriched s ON s.seed_wb_sku = c.seed_wb_sku
         {punta_left_joins}
+        {material_filter}
     )
     , scored AS (
         SELECT *
@@ -131,7 +224,7 @@ def search_similar_matches(
         FROM deduped
     )
     SELECT * FROM ranked
-    WHERE rn <= {cfg.max_recommendations}
+    WHERE rn <= {cfg.max_candidates_per_seed}
     ORDER BY seed_wb_sku, final_score DESC, cand_wb_sku
     """
 
@@ -150,7 +243,7 @@ def search_similar_matches(
     
     # For seed wb_sku (input values), assign a high reference score (e.g., base_score or max observed)
     # This indicates they are the reference items
-    seed_wb_skus = set(int(x) for x in df_pairs.seed_wb_sku.unique())
+    seed_wb_skus = {int(x) for x in df_pairs.seed_wb_sku.unique()}
     for seed_wb in seed_wb_skus:
         if seed_wb not in similarity_scores:
             # Use the maximum score they were matched with, or a default
@@ -185,6 +278,22 @@ def search_similar_matches(
         root = find(k)
         comp_map.setdefault(root, set()).add(k)
     components = list(comp_map.values())
+
+    # Разбиваем большие компоненты, если указан max_group_size
+    if cfg.max_group_size is not None:
+        split_components = []
+        large_components_count = 0
+        for comp in components:
+            if len(comp) > cfg.max_group_size:
+                large_components_count += 1
+                subgroups = _split_large_component(comp, df_pairs, cfg.max_group_size)
+                logger.info(f"Split large component of size {len(comp)} into {len(subgroups)} subgroups")
+                split_components.extend(subgroups)
+            else:
+                split_components.append(comp)
+        if large_components_count > 0:
+            logger.info(f"Split {large_components_count} large components, total groups: {len(components)} -> {len(split_components)}")
+        components = split_components
 
     mapping: dict[int, tuple[str, str]] = {}
     merge_code_to_group: dict[str, int] = {}
@@ -325,6 +434,7 @@ def search_similar_matches_debug(
             JOIN seed_enriched s ON s.seed_wb_sku = c.seed_wb_sku
             LEFT JOIN pg_seed ON pg_seed.wb_sku = s.seed_wb_sku
             LEFT JOIN pg_cand ON pg_cand.wb_sku = c.cand_wb_sku
+            WHERE (pg_seed.material_short IS NULL OR pg_cand.material_short IS NULL OR pg_seed.material_short = pg_cand.material_short)
             """
         ).fetchone()
         stats["pairs"] = int(pair_row[0]) if pair_row else 0

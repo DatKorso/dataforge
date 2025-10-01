@@ -28,21 +28,24 @@ class SimilarityScoringConfig:
 
     no_last_penalty_multiplier: float = 0.7  # множитель, если не совпала ни одна колодка
 
-    min_score_threshold: float = 50.0
-    max_recommendations: int = 10
+    min_score_threshold: float = 300.0
+    max_candidates_per_seed: int = 30
+    max_group_size: int | None = 10  # максимальный размер группы (None = без ограничения)
 
     def validate(self) -> None:
         if self.base_score <= 0:
             raise ValueError("base_score must be > 0")
         if not (0 < self.min_score_threshold < self.max_score):
             raise ValueError("min_score_threshold must be between 0 and max_score")
-        if self.max_recommendations <= 0:
-            raise ValueError("max_recommendations must be > 0")
+        if self.max_candidates_per_seed <= 0:
+            raise ValueError("max_candidates_per_seed must be > 0")
         if not (0 < self.no_last_penalty_multiplier <= 1):
             raise ValueError("no_last_penalty_multiplier must be in (0,1]")
+        if self.max_group_size is not None and self.max_group_size <= 0:
+            raise ValueError("max_group_size must be > 0 or None")
 
     @classmethod
-    def from_dict(cls, data: dict | None) -> "SimilarityScoringConfig":
+    def from_dict(cls, data: dict | None) -> SimilarityScoringConfig:
         if not data:
             return cls()
         allowed = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
