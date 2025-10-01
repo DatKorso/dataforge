@@ -192,7 +192,8 @@ if search_btn:
                         df.groupby("wb_sku")
                         .agg(
                             {
-                                "oz_vendor_code": "count",
+                                # Количество уникальных размеров (oz_vendor_code) — соответствует таблице результатов
+                                "oz_vendor_code": lambda s: s.nunique(),
                                 "size_stock": "sum",
                                 "size_orders": "sum",
                                 "model_stock": "first",

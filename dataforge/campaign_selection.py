@@ -315,6 +315,8 @@ def select_campaign_candidates(
 
             # Формируем результаты
             group_number += 1
+            # Убедимся, что в рамках одной группы не добавляем один и тот же oz_vendor_code дважды.
+            seen_vendor_codes: set[str] = set()
             for _, row in df_selected.iterrows():
                 oz_price = float(row["oz_price"]) if pd.notna(row.get("oz_price")) else None
 
@@ -338,6 +340,12 @@ def select_campaign_candidates(
                         vat_percent=vat_percent,
                         exchange_rate=exchange_rate,
                     )
+
+                oz_vendor = str(row["oz_vendor_code"]) if pd.notna(row.get("oz_vendor_code")) else ""
+                if oz_vendor in seen_vendor_codes:
+                    # Пропускаем повторный размер в одной группе
+                    continue
+                seen_vendor_codes.add(oz_vendor)
 
                 results.append(
                     CandidateResult(
