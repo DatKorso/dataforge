@@ -28,3 +28,6 @@ logs/
 
 # zed
 .ropeproject
+
+# vscode counter
+.VSCodeCounter/
