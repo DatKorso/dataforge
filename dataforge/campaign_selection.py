@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import TypedDict, Any, Sequence
 
 import duckdb
 import pandas as pd
@@ -129,32 +129,34 @@ def select_campaign_candidates(
     if own_con:
         con = get_connection(md_token=md_token, md_database=md_database).__enter__()
 
+    # Гарантируем, что у нас есть валидное соединение (убирает предупреждения статического анализатора и
+    # предотвращает ошибку "execute" не является известным атрибутом "None")
+    assert con is not None, "Failed to obtain a DuckDB connection (con is None)"
+
     try:
         results: list[CandidateResult] = []
         group_number = 0
 
         # 0) Проверяем существование таблиц один раз (вне цикла)
-        pg_exists = (
-            con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_google'"
-            ).fetchone()[0]
-            > 0
-        )
-        pb_exists = (
-            con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_barcodes'"
-            ).fetchone()[0]
-            > 0
-        )
-        ppc_exists = (
-            con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'punta_products_codes'"
-            ).fetchone()[0]
-            > 0
-        )
+        def _table_exists(table: str) -> bool:
+            # Используем параметризованный запрос и проверяем, что fetchone() вернул строку.
+            res = con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+                [table],
+            ).fetchone()
+            if not res or len(res) == 0 or res[0] is None:
+                return False
+            try:
+                return int(res[0]) > 0
+            except Exception:
+                return False
+
+        pg_exists = _table_exists("punta_google")
+        pb_exists = _table_exists("punta_barcodes")
+        ppc_exists = _table_exists("punta_products_codes")
 
         # 1) Собираем все матчинги разом, а затем батчим запрос по товарам
-        matches_by_wb: dict[str, list[dict]] = {}
+        matches_by_wb: dict[str, Sequence[Any]] = {}
         external_code_by_oz_all: dict[str, str] = {}
         all_oz_skus: list[str] = []
         for wb_sku in wb_skus:
@@ -211,6 +213,33 @@ def select_campaign_candidates(
 
         if "cost_usd" not in df_all.columns:
             df_all["cost_usd"] = pd.NA
+
+        # В некоторых случаях JOIN'ы (например с punta_barcodes/punta_products_codes)
+        # могут создать дублированные строки для одного и того же oz_vendor_code.
+        # Это приведёт к дублированию размеров в итоговой выборке. Чтобы избежать
+        # этого, оставим только одну строку на oz_vendor_code, предпочтительно
+        # сохраняя агрегированные числовые поля (fbo_available, total_orders)
+        # — здесь аккуратно агрегируем по сумме/максимуму, затем заменяем df_all.
+        try:
+            if not df_all.empty and "oz_vendor_code" in df_all.columns:
+                # Агрегируем: суммируем остатки и заказы, берём max цены и first cost_usd
+                df_agg = (
+                    df_all.groupby("oz_vendor_code", as_index=False)
+                    .agg(
+                        {
+                            "oz_sku": lambda s: s.astype(str).dropna().unique()[0] if len(s.dropna().unique()) > 0 else pd.NA,
+                            "fbo_available": "sum",
+                            "total_orders": "sum",
+                            "oz_price": "max",
+                            "cost_usd": lambda s: s.dropna().iloc[0] if s.dropna().shape[0] > 0 else pd.NA,
+                        }
+                    )
+                )
+                # Переименуем oz_sku обратно к строковому виду и используем агрегированный df
+                df_all = df_agg
+        except Exception:
+            # Если агрегирование по какой-то причине не удалось, оставим оригинальный df_all
+            pass
 
         # 3) Загружаем себестоимости по external_code (единоразово)
         cost_by_external: dict[str, float | None] = {}
@@ -291,8 +320,9 @@ def select_campaign_candidates(
 
                 # Себестоимость из запроса или по external_code из matching
                 cost_usd: float | None
-                if pd.notna(row.get("cost_usd")):
-                    cost_usd = float(row.get("cost_usd"))
+                tmp_cost = row.get("cost_usd")
+                if pd.notna(tmp_cost):
+                    cost_usd = float(tmp_cost)
                 else:
                     ext_code = external_code_by_oz_all.get(str(row["oz_sku"]))
                     cost_usd = cost_by_external.get(ext_code) if ext_code else None

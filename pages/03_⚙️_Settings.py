@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import cast
 
 import streamlit as st
 from dataforge.db import check_connection, get_connection
@@ -250,8 +251,10 @@ if st.button("Обновить связку Punta"):
                     "SELECT COUNT(*) AS rows, COUNT(DISTINCT external_code) AS codes FROM punta_products_codes"
                 ).fetch_df()
                 if not stats.empty:
-                    rows = int(stats.loc[0, "rows"]) if stats.loc[0, "rows"] is not None else None
-                    codes = int(stats.loc[0, "codes"]) if stats.loc[0, "codes"] is not None else None
+                    raw_rows = stats.loc[0, "rows"]
+                    raw_codes = stats.loc[0, "codes"]
+                    rows = int(cast(int, raw_rows)) if raw_rows is not None else None
+                    codes = int(cast(int, raw_codes)) if raw_codes is not None else None
         except Exception:
             pass
 

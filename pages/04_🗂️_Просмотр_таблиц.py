@@ -6,7 +6,7 @@ from dataforge.db import get_connection
 from dataforge.imports.loader import quote_ident
 from dataforge.ui import setup_page
 
-setup_page(title="DataForge", icon="🛠️")
+setup_page(title="DataForge", icon="🛠️", sidebar_state="collapsed")
 st.title("🗂️ Просмотр таблиц БД")
 st.caption("Выберите таблицу MotherDuck, выполните поиск и просматривайте данные постранично.")
 
@@ -134,11 +134,11 @@ with cols_ctrl[2]:
 cols_df = list_columns(schema, table, md_token=md_token, md_database=md_database)
 all_cols: list[str] = cols_df["column_name"].astype(str).tolist()
 
-search = query_text.strip()
+search = (query_text or "").strip()
 pattern = f"%{escape_like(search)}%" if search else None
 
 where_sql = ""
-params: list[str] = []
+params: list[str | None] = []
 if search:
     where_frag, _ = build_search_clause(all_cols)
     where_sql = f"WHERE {where_frag}"
@@ -150,7 +150,11 @@ try:
     with get_connection(md_token=md_token, md_database=md_database) as con:
         # Total rows (filtered)
         cnt_sql = f"SELECT COUNT(*) AS n FROM {qname} {where_sql}"
-        total_rows = int(con.execute(cnt_sql, params).fetchone()[0])
+        row = con.execute(cnt_sql, params).fetchone()
+        if row is None:
+            total_rows = 0
+        else:
+            total_rows = int(row[0]) if row[0] is not None else 0
 
         # Pagination
         total_pages = max(1, (total_rows + per_page - 1) // per_page)

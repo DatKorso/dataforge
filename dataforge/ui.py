@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import streamlit as st
 
@@ -18,7 +18,7 @@ def setup_page(
     *,
     title: str = "DataForge",
     icon: str = "🛠️",
-    sidebar_state: str = "expanded",
+    sidebar_state: Literal["expanded", "collapsed", "auto"] = "expanded",
 ) -> None:
     """Configure the page with a shared, wide layout.
 
