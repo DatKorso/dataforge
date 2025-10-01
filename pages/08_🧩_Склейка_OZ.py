@@ -8,6 +8,7 @@ import streamlit as st
 from dataforge.matching import search_matches
 from dataforge.matching_helpers import add_merge_fields
 from dataforge.ui import setup_page
+import math
 
 setup_page(title="DataForge — Склейка OZ", icon="🧩")
 
@@ -61,7 +62,7 @@ with st.form(key="oz_merge_form"):
             "Лимит кандидатов (0 — без лимита)",
             min_value=0,
             max_value=10000,
-            value=int(st.session_state.get("oz_merge_limit", 0)),
+            value=int(st.session_state.get("oz_merge_limit", 20)),
             key="oz_merge_limit",
         )
 
@@ -73,8 +74,14 @@ with st.form(key="oz_merge_form"):
         key="oz_merge_input_text",
     )
 
-    st.checkbox("Без брака Озон", key="oz_merge_filter_no_defect", help="Исключить oz_vendor_code начинающиеся на БракSH")
-    st.checkbox("Без дублей размеров", key="oz_merge_filter_unique_sizes", help="Оставлять по одному значению размера с наивысшим match_score")
+    st.checkbox("Без брака Озон", key="oz_merge_filter_no_defect", value=True, help="Исключить oz_vendor_code начинающиеся на БракSH")
+    st.checkbox("Без дублей размеров", key="oz_merge_filter_unique_sizes", value=True, help="Оставлять по одному значению размера с наивысшим match_score")
+    st.write("---")
+    st.markdown("**Параметры пакетной обработки (chunking)**")
+    # calibrated defaults from autotune
+    st.number_input("Размер батча (batch_size)", min_value=1, max_value=5000, value=int(st.session_state.get("oz_merge_batch_size", 1000)), key="oz_merge_batch_size")
+    st.write(f"Лимит кандидатов на вход (limit_per_input): {int(st.session_state.get('oz_merge_limit', 20))}")
+    st.info("Batch processing будет выполнять поиск партиями и обновлять результаты по мере получения данных.")
 
     submitted = st.form_submit_button("Склеить", type="primary")
 
@@ -93,31 +100,64 @@ if submitted:
         st.info("Передано много значений; операция может занять время.")
 
     try:
-        with st.spinner("Поиск OZ карточек по WB SKU..."):
-            df = search_matches(
-                values,
-                input_type="wb_sku",
-                limit_per_input=(None if int(st.session_state.get("oz_merge_limit", 0)) <= 0 else int(st.session_state.get("oz_merge_limit", 0))),
-                md_token=md_token,
-                md_database=md_database,
-            )
+        # Batch processing with progress
+        batch_size = int(st.session_state.get("oz_merge_batch_size", 1000))
+        limit_per_input = int(st.session_state.get("oz_merge_limit", 20))
+        total = len(values)
+        n_chunks = math.ceil(total / batch_size)
 
-        # Apply defect filter
-        if st.session_state.get("oz_merge_filter_no_defect", True) and "oz_vendor_code" in df.columns:
-            starts_with_brak = df["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
-            df = df.loc[~starts_with_brak]
+        st.session_state["oz_merge_result"] = pd.DataFrame()
+        progress = st.progress(0)
+        fetched = 0
 
-        # Deduplicate sizes similar to existing page
-        if st.session_state.get("oz_merge_filter_unique_sizes", True):
+        for idx in range(n_chunks):
+            start = idx * batch_size
+            end = min(start + batch_size, total)
+            chunk = values[start:end]
+            with st.spinner(f"Запрос партии {idx+1}/{n_chunks} ({start+1}-{end})..."):
+                df_chunk = search_matches(
+                    chunk,
+                    input_type="wb_sku",
+                    limit_per_input=(None if limit_per_input <= 0 else limit_per_input),
+                    md_token=md_token,
+                    md_database=md_database,
+                )
+
+            if df_chunk is None or df_chunk.empty:
+                df_chunk = pd.DataFrame()
+
+            # Apply defect filter per-chunk to reduce memory
+            if st.session_state.get("oz_merge_filter_no_defect", True) and "oz_vendor_code" in df_chunk.columns:
+                starts_with_brak = df_chunk["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
+                df_chunk = df_chunk.loc[~starts_with_brak]
+
+            # Add merge fields to the chunk
+            if not df_chunk.empty and "oz_vendor_code" in df_chunk.columns:
+                df_chunk = add_merge_fields(df_chunk, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+
+            # accumulate safely
+            df_result = st.session_state.get("oz_merge_result")
+            if df_result is None or (hasattr(df_result, "empty") and df_result.empty):
+                st.session_state["oz_merge_result"] = df_chunk.copy()
+            else:
+                st.session_state["oz_merge_result"] = pd.concat([df_result, df_chunk], ignore_index=True, copy=False)
+
+            fetched += len(chunk)
+            # Update progress
+            progress.progress(int((end / total) * 100))
+
+        # Final dedupe sizes similar to existing page
+        if st.session_state.get("oz_merge_filter_unique_sizes", True) and not st.session_state["oz_merge_result"].empty:
             from dataforge.matching_helpers import dedupe_sizes
 
-            df = dedupe_sizes(df, input_type="wb_sku")
+            st.session_state["oz_merge_result"] = dedupe_sizes(st.session_state["oz_merge_result"], input_type="wb_sku")
 
-        # Add merge fields
-        df = add_merge_fields(df, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+        # Ensure merge fields present (in case dedupe removed them)
+        if not st.session_state["oz_merge_result"].empty:
+            st.session_state["oz_merge_result"] = add_merge_fields(st.session_state["oz_merge_result"], wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
 
-        st.session_state["oz_merge_result"] = df
         # collect invalid oz_vendor_code rows for highlighting
+        df = st.session_state["oz_merge_result"]
         if "oz_vendor_code" in df.columns:
             invalid_mask = ~df["oz_vendor_code"].astype(str).str.contains("-", regex=False)
             st.session_state["oz_merge_invalid_oz_vendor"] = df.loc[invalid_mask]
