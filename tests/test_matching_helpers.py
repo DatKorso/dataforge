@@ -60,3 +60,80 @@ def test_dedupe_sizes_keep_highest_score():
     assert len(out) == 2
     assert 80 in out["match_score"].values
     assert 60 in out["match_score"].values
+
+
+
+def test_mark_duplicate_sizes_basic():
+    """Test marking duplicates with C/D prefixes."""
+    df = pd.DataFrame([
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-ABC123", "match_score": 100},
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-ABC123", "match_score": 80},
+        {"group_number": 1, "oz_manufacturer_size": "32", "merge_code": "C-ABC123", "match_score": 90},
+    ])
+    from dataforge.matching_helpers import mark_duplicate_sizes
+    
+    out = mark_duplicate_sizes(df, primary_prefix="C", duplicate_prefix="D")
+    
+    # First size 30 should keep C prefix
+    first_30 = out[out["match_score"] == 100].iloc[0]
+    assert first_30["merge_code"].startswith("C-")
+    assert first_30["group_number"] == 1
+    
+    # Second size 30 should get D prefix (no _2 suffix for only 2 duplicates)
+    second_30 = out[out["match_score"] == 80].iloc[0]
+    assert second_30["merge_code"].startswith("D-")
+    assert "_2" not in second_30["merge_code"]  # Only two items, no suffix
+    assert second_30["group_number"] != 1  # Different group
+    
+    # Size 32 should keep C prefix (no duplicates)
+    size_32 = out[out["match_score"] == 90].iloc[0]
+    assert size_32["merge_code"].startswith("C-")
+    assert size_32["group_number"] == 1
+
+
+def test_mark_duplicate_sizes_multiple_duplicates():
+    """Test marking multiple duplicates with _N suffix."""
+    df = pd.DataFrame([
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-XYZ789", "match_score": 100},
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-XYZ789", "match_score": 80},
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-XYZ789", "match_score": 60},
+    ])
+    from dataforge.matching_helpers import mark_duplicate_sizes
+    
+    out = mark_duplicate_sizes(df, primary_prefix="C", duplicate_prefix="D")
+    
+    # Sort by match_score to check order
+    out_sorted = out.sort_values("match_score", ascending=False)
+    
+    # First (best) should keep C prefix
+    assert out_sorted.iloc[0]["merge_code"].startswith("C-")
+    assert out_sorted.iloc[0]["group_number"] == 1
+    
+    # Second should get D with _2
+    assert out_sorted.iloc[1]["merge_code"].startswith("D-")
+    assert "_2" in out_sorted.iloc[1]["merge_code"]
+    
+    # Third should get D with _3
+    assert out_sorted.iloc[2]["merge_code"].startswith("D-")
+    assert "_3" in out_sorted.iloc[2]["merge_code"]
+
+
+def test_mark_duplicate_sizes_multiple_groups():
+    """Test that duplicates are only marked within the same group."""
+    df = pd.DataFrame([
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-AAA", "match_score": 100},
+        {"group_number": 1, "oz_manufacturer_size": "30", "merge_code": "C-AAA", "match_score": 80},
+        {"group_number": 2, "oz_manufacturer_size": "30", "merge_code": "C-BBB", "match_score": 90},
+    ])
+    from dataforge.matching_helpers import mark_duplicate_sizes
+    
+    out = mark_duplicate_sizes(df, primary_prefix="C", duplicate_prefix="D")
+    
+    # Group 1: first size 30 keeps C, second gets D
+    group1 = out[out["merge_code"].str.contains("AAA")].sort_values("match_score", ascending=False)
+    assert group1.iloc[0]["merge_code"].startswith("C-")
+    assert group1.iloc[1]["merge_code"].startswith("D-")
+    
+    # Group 2: only one size 30, keeps C
+    group2 = out[out["merge_code"].str.contains("BBB")]
+    assert group2.iloc[0]["merge_code"].startswith("C-")

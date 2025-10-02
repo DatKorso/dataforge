@@ -109,6 +109,7 @@ with st.form(key="oz_merge_form"):
 
     st.checkbox("Без брака Озон", key="oz_merge_filter_no_defect", value=True, help="Исключить oz_vendor_code начинающиеся на БракSH")
     st.checkbox("Без дублей размеров", key="oz_merge_filter_unique_sizes", value=True, help="Оставлять по одному значению размера с наивысшим match_score")
+    st.caption("⚠️ После изменения настроек нажмите 'Склеить' снова для применения изменений")
     st.write("---")
     st.markdown("**Параметры пакетной обработки (chunking)**")
     # calibrated defaults from autotune
@@ -201,12 +202,31 @@ if submitted:
                 # Update progress
                 progress.progress(int((end / total) * 100))
             
-            # Final dedupe sizes
-            if st.session_state.get("oz_merge_filter_unique_sizes", True) and not st.session_state["oz_merge_result"].empty:
-                df_similarity = st.session_state["oz_merge_result"]
-                if 'oz_manufacturer_size' in df_similarity.columns:
-                    df_similarity = df_similarity.sort_values(['match_score'], ascending=[False])
-                    df_similarity = df_similarity.drop_duplicates(subset=['wb_sku','oz_sku','oz_manufacturer_size'], keep='first')
+            # Handle duplicate sizes
+            df_similarity = st.session_state["oz_merge_result"]
+            
+            if st.session_state.get("oz_merge_filter_unique_sizes", True):
+                # Remove duplicates completely
+                if not df_similarity.empty and 'oz_manufacturer_size' in df_similarity.columns and 'group_number' in df_similarity.columns:
+                    mask_known_size = df_similarity['oz_manufacturer_size'].notna() & (df_similarity['oz_manufacturer_size'].astype(str).str.strip() != "")
+                    df_known = df_similarity.loc[mask_known_size].copy()
+                    df_unknown = df_similarity.loc[~mask_known_size].copy()
+                    
+                    if not df_known.empty:
+                        df_known = df_known.sort_values(['match_score'], ascending=[False])
+                        df_known = df_known.drop_duplicates(subset=['group_number', 'oz_manufacturer_size'], keep='first')
+                        df_similarity = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
+                    
+                    st.session_state["oz_merge_result"] = df_similarity
+            else:
+                # Keep duplicates but mark them with 'D' prefix
+                if not df_similarity.empty:
+                    from dataforge.matching_helpers import mark_duplicate_sizes
+                    df_similarity = mark_duplicate_sizes(
+                        df_similarity,
+                        primary_prefix="C",
+                        duplicate_prefix="D"
+                    )
                     st.session_state["oz_merge_result"] = df_similarity
             
             # Check for missing wb_sku
@@ -259,6 +279,32 @@ if submitted:
                             # Merge with main results
                             st.session_state["oz_merge_result"] = pd.concat([df_similarity, df_fallback], ignore_index=True)
                             st.success(f"✅ Добавлено {len(df_fallback)} строк из базового алгоритма")
+                            
+                            # Final dedupe/mark after merging
+                            if st.session_state.get("oz_merge_filter_unique_sizes", True):
+                                # Remove duplicates
+                                df_merged = st.session_state["oz_merge_result"]
+                                if 'oz_manufacturer_size' in df_merged.columns and 'group_number' in df_merged.columns:
+                                    mask_known_size = df_merged['oz_manufacturer_size'].notna() & (df_merged['oz_manufacturer_size'].astype(str).str.strip() != "")
+                                    df_known = df_merged.loc[mask_known_size].copy()
+                                    df_unknown = df_merged.loc[~mask_known_size].copy()
+                                    
+                                    if not df_known.empty:
+                                        df_known = df_known.sort_values(['match_score'], ascending=[False])
+                                        df_known = df_known.drop_duplicates(subset=['group_number', 'oz_manufacturer_size'], keep='first')
+                                        df_merged = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
+                                    
+                                    st.session_state["oz_merge_result"] = df_merged
+                            else:
+                                # Mark duplicates
+                                from dataforge.matching_helpers import mark_duplicate_sizes
+                                df_merged = st.session_state["oz_merge_result"]
+                                df_merged = mark_duplicate_sizes(
+                                    df_merged,
+                                    primary_prefix="C",
+                                    duplicate_prefix="D"
+                                )
+                                st.session_state["oz_merge_result"] = df_merged
                 except Exception as e:
                     st.error(f"❌ Ошибка при выполнении fallback алгоритма: {e}")
                     # Продолжаем с результатами similarity, не прерывая работу
@@ -318,15 +364,40 @@ if submitted:
                 # Update progress
                 progress.progress(int((end / total) * 100))
 
-            # Final dedupe sizes similar to existing page
-            if st.session_state.get("oz_merge_filter_unique_sizes", True) and not st.session_state["oz_merge_result"].empty:
+                        # Final dedupe sizes similar to existing page
+            filter_unique = st.session_state.get("oz_merge_filter_unique_sizes", True)
+            
+            if filter_unique and not st.session_state["oz_merge_result"].empty:
                 from dataforge.matching_helpers import dedupe_sizes
 
                 st.session_state["oz_merge_result"] = dedupe_sizes(st.session_state["oz_merge_result"], input_type="wb_sku")
-
-            # Ensure merge fields present (in case dedupe removed them)
-            if not st.session_state["oz_merge_result"].empty:
-                st.session_state["oz_merge_result"] = add_merge_fields(st.session_state["oz_merge_result"], wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+                
+                # Ensure merge fields present after dedupe
+                if not st.session_state["oz_merge_result"].empty:
+                    st.session_state["oz_merge_result"] = add_merge_fields(st.session_state["oz_merge_result"], wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+            elif not st.session_state["oz_merge_result"].empty:
+                # Keep duplicates but mark them with 'D' prefix (primary uses 'B' for basic algorithm)
+                from dataforge.matching_helpers import mark_duplicate_sizes
+                
+                df_result = st.session_state["oz_merge_result"]
+                
+                # IMPORTANT: Recalculate group_number based on merge_code after merging all chunks
+                # because each chunk had its own group numbering
+                unique_merge_codes = sorted(df_result["merge_code"].unique())
+                merge_code_to_group = {code: idx + 1 for idx, code in enumerate(unique_merge_codes)}
+                df_result["group_number"] = df_result["merge_code"].map(merge_code_to_group)
+                
+                # For basic algorithm, use wb_sku as grouping column to find duplicates within same wb_sku
+                df_result = mark_duplicate_sizes(
+                    df_result,
+                    primary_prefix="B",
+                    duplicate_prefix="D",
+                    grouping_column="wb_sku"  # Group by wb_sku instead of group_number
+                )
+                
+                st.session_state["oz_merge_result"] = df_result
+                st.session_state["oz_merge_result"] = df_result
+                # Note: merge_code is already set by mark_duplicate_sizes, don't call add_merge_fields
 
             # collect invalid oz_vendor_code rows for highlighting
             df = st.session_state["oz_merge_result"]

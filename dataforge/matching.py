@@ -159,10 +159,10 @@ def _matches_for_oz_skus(
                b.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                b.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_manufacturer_size,
-               NULL::VARCHAR AS oz_product_name,
-               NULL::VARCHAR AS oz_brand,
-               NULL::VARCHAR AS oz_color
+               f.russian_size AS oz_manufacturer_size,
+               f.product_name AS oz_product_name,
+               f.brand AS oz_brand,
+               f.color AS oz_color
         FROM oz_base b
         LEFT JOIN oz_products_full f ON f.oz_vendor_code = b.oz_vendor_code
         WHERE b.oz_barcode_primary IS NOT NULL
@@ -305,10 +305,10 @@ def _matches_for_wb_skus(
                o.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_manufacturer_size,
-               NULL::VARCHAR AS oz_product_name,
-               NULL::VARCHAR AS oz_brand,
-               NULL::VARCHAR AS oz_color
+               f.russian_size AS oz_manufacturer_size,
+               f.product_name AS oz_product_name,
+               f.brand AS oz_brand,
+               f.color AS oz_color
         FROM oz_full o
         LEFT JOIN oz_products_full f ON f.oz_vendor_code = o.oz_vendor_code
         WHERE o.oz_barcode_primary IS NOT NULL
@@ -413,10 +413,10 @@ def _matches_for_barcodes(
         UNION ALL
         SELECT o.oz_vendor_code, o.oz_sku, o.oz_barcode_primary AS barcode, TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_manufacturer_size,
-               NULL::VARCHAR AS oz_product_name,
-               NULL::VARCHAR AS oz_brand,
-               NULL::VARCHAR AS oz_color
+               f.russian_size AS oz_manufacturer_size,
+               f.product_name AS oz_product_name,
+               f.brand AS oz_brand,
+               f.color AS oz_color
         FROM oz_full o
         LEFT JOIN oz_products_full f ON f.oz_vendor_code = o.oz_vendor_code
         WHERE o.oz_barcode_primary IS NOT NULL
@@ -556,10 +556,10 @@ def _matches_for_external_codes(
                o.oz_barcode_primary AS barcode,
                TRUE AS is_primary,
                o.oz_barcode_primary AS oz_primary_barcode,
-               NULL::VARCHAR AS oz_manufacturer_size,
-               NULL::VARCHAR AS oz_product_name,
-               NULL::VARCHAR AS oz_brand,
-               NULL::VARCHAR AS oz_color
+               f.russian_size AS oz_manufacturer_size,
+               f.product_name AS oz_product_name,
+               f.brand AS oz_brand,
+               f.color AS oz_color
         FROM oz_full o
         LEFT JOIN oz_products_full f ON f.oz_vendor_code = o.oz_vendor_code
         WHERE o.oz_barcode_primary IS NOT NULL
