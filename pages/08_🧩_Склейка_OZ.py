@@ -227,14 +227,24 @@ if submitted:
                                 starts_with_brak = df_fallback["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
                                 df_fallback = df_fallback.loc[~starts_with_brak]
                             
-                            # Dedupe sizes first if needed
-                            if st.session_state.get("oz_merge_filter_unique_sizes", True) and not df_fallback.empty:
-                                from dataforge.matching_helpers import dedupe_sizes
-                                df_fallback = dedupe_sizes(df_fallback, input_type="wb_sku")
-                            
-                            # Add merge fields after deduplication
+                            # Add merge fields first (before any deduplication)
                             if not df_fallback.empty and "oz_vendor_code" in df_fallback.columns:
                                 df_fallback = add_merge_fields(df_fallback, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+                            
+                            # Handle duplicates based on filter setting
+                            if st.session_state.get("oz_merge_filter_unique_sizes", True) and not df_fallback.empty:
+                                # Remove duplicates completely
+                                from dataforge.matching_helpers import dedupe_sizes
+                                df_fallback = dedupe_sizes(df_fallback, input_type="wb_sku")
+                            elif not df_fallback.empty:
+                                # Keep duplicates but mark them with 'D' prefix
+                                from dataforge.matching_helpers import mark_duplicate_sizes
+                                df_fallback = mark_duplicate_sizes(
+                                    df_fallback,
+                                    primary_prefix="B",
+                                    duplicate_prefix="D",
+                                    grouping_column="wb_sku"
+                                )
                             
                             if not df_fallback.empty and "group_number" in df_fallback.columns:
                                 if "group_number" in df_similarity.columns and not df_similarity.empty:
@@ -252,22 +262,8 @@ if submitted:
                             st.session_state["oz_merge_result"] = pd.concat([df_similarity, df_fallback], ignore_index=True)
                             st.success(f"✅ Добавлено {len(df_fallback)} строк из базового алгоритма")
                             
-                            # Final dedupe/mark after merging
-                            if st.session_state.get("oz_merge_filter_unique_sizes", True):
-                                # Remove duplicates - use wb_sku + size for fallback items
-                                df_merged = st.session_state["oz_merge_result"]
-                                if 'oz_manufacturer_size' in df_merged.columns and 'wb_sku' in df_merged.columns:
-                                    mask_known_size = df_merged['oz_manufacturer_size'].notna() & (df_merged['oz_manufacturer_size'].astype(str).str.strip() != "")
-                                    df_known = df_merged.loc[mask_known_size].copy()
-                                    df_unknown = df_merged.loc[~mask_known_size].copy()
-                                    
-                                    if not df_known.empty:
-                                        df_known = df_known.sort_values(['match_score'], ascending=[False])
-                                        # Dedupe by wb_sku + size (works for both similarity and fallback)
-                                        df_known = df_known.drop_duplicates(subset=['wb_sku', 'oz_manufacturer_size'], keep='first')
-                                        df_merged = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
-                                    
-                                    st.session_state["oz_merge_result"] = df_merged
+                            # Note: No need for final dedupe/mark after merging for similarity algorithm
+                            # Both similarity and fallback items already have proper duplicate marking
                 except Exception as e:
                     st.error(f"❌ Ошибка при выполнении fallback алгоритма: {e}")
                     # Продолжаем с результатами similarity, не прерывая работу
