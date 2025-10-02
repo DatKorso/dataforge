@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 from dataforge.db import get_connection
+from dataforge.matching import find_wb_by_oz
 from dataforge.similarity_config import SimilarityScoringConfig
 from dataforge.ui import setup_page
 
@@ -12,8 +13,19 @@ st.title("🧹 Схожесть карточек OZ")
 st.caption("Сравнение схожести между двумя WB товарами по алгоритму похожести.")
 
 
+def _sget(key: str) -> str | None:
+    """Safely get a value from Streamlit secrets."""
+    try:
+        return st.secrets[key]  # type: ignore[index]
+    except Exception:
+        return None
+
+
 def get_product_data(wb_sku: str, md_token: str | None = None, md_database: str | None = None) -> pd.DataFrame:
     """Получить данные товара из wb_products и punta_google."""
+    if not wb_sku or not str(wb_sku).strip():
+        return pd.DataFrame()
+    
     try:
         with get_connection(md_token=md_token, md_database=md_database) as con:
             # Получаем данные из wb_products
@@ -31,7 +43,7 @@ def get_product_data(wb_sku: str, md_token: str | None = None, md_database: str 
             FROM wb_products
             WHERE wb_sku = ?
             """
-            wb_df = con.execute(wb_query, [wb_sku]).fetch_df()
+            wb_df = con.execute(wb_query, [str(wb_sku)]).fetch_df()
 
             if wb_df.empty:
                 return pd.DataFrame()
@@ -52,11 +64,11 @@ def get_product_data(wb_sku: str, md_token: str | None = None, md_database: str 
                 FROM punta_google
                 WHERE wb_sku = ?
                 """
-                punta_df = con.execute(punta_query, [wb_sku]).fetch_df()
+                punta_df = con.execute(punta_query, [str(wb_sku)]).fetch_df()
                 if not punta_df.empty:
                     punta_data = punta_df.iloc[0].to_dict()
             except Exception:
-                # Таблица punta_google может не существовать
+                # Таблица punta_google может не существовать или быть недоступна
                 pass
 
             # Объединяем данные
@@ -69,11 +81,31 @@ def get_product_data(wb_sku: str, md_token: str | None = None, md_database: str 
         return pd.DataFrame()
 
 
+def find_wb_sku_by_oz_sku(oz_sku: str, md_token: str | None = None, md_database: str | None = None) -> str | None:
+    """Найти WB SKU по OZ SKU используя функции из matching.py.
+    
+    Возвращает первый найденный WB SKU с наивысшим match_score или None.
+    """
+    if not oz_sku or not str(oz_sku).strip():
+        return None
+    
+    try:
+        matches = find_wb_by_oz(str(oz_sku), limit=1, md_token=md_token, md_database=md_database)
+        if matches and len(matches) > 0:
+            return matches[0].wb_sku
+        return None
+    except Exception:
+        return None
+
+
 def calculate_similarity_details(product_left: pd.Series, product_right: pd.Series) -> dict:
-    """Рассчитать подробную схожесть между двумя товарами."""
+    """Рассчитать подробную схожесть между двумя товарами.
+    
+    Использует SimilarityScoringConfig для консистентных параметров скоринга.
+    """
     cfg = SimilarityScoringConfig()
 
-    # Извлекаем данные товаров
+    # Извлекаем данные товаров - используем .get() для безопасного доступа
     left_data = product_left.to_dict()
     right_data = product_right.to_dict()
 
@@ -95,16 +127,14 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
 
     total_score = base_score
 
-    # Сезон
+    # Сезон - применяем бонус/штраф только если оба значения известны
     left_season = left_data.get("season")
     right_season = right_data.get("season")
     season_score = 0
 
     if left_season and right_season:
         season_score = cfg.season_match_bonus if left_season == right_season else cfg.season_mismatch_penalty
-    elif left_season or right_season:
-        # Если только один сезон указан, не применяем штраф/бонус
-        season_score = 0
+    # Если только один сезон указан или оба отсутствуют, не применяем штраф/бонус
 
     details["parameters"].append({
         "parameter": "Сезон",
@@ -118,7 +148,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     # Цвет (из punta_google)
     left_color = left_data.get("color")
     right_color = right_data.get("color")
-    color_score = cfg.color_match_bonus if left_color and left_color == right_color else 0
+    color_score = cfg.color_match_bonus if left_color and right_color and left_color == right_color else 0
 
     details["parameters"].append({
         "parameter": "Цвет (Punta)",
@@ -132,7 +162,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     # Материал
     left_material = left_data.get("material_short")
     right_material = right_data.get("material_short")
-    material_score = cfg.material_match_bonus if left_material and left_material == right_material else 0
+    material_score = cfg.material_match_bonus if left_material and right_material and left_material == right_material else 0
 
     details["parameters"].append({
         "parameter": "Материал",
@@ -146,7 +176,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     # Крепление
     left_fastener = left_data.get("lacing_type")
     right_fastener = right_data.get("lacing_type")
-    fastener_score = cfg.fastener_match_bonus if left_fastener and left_fastener == right_fastener else 0
+    fastener_score = cfg.fastener_match_bonus if left_fastener and right_fastener and left_fastener == right_fastener else 0
 
     details["parameters"].append({
         "parameter": "Крепление",
@@ -157,7 +187,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     })
     total_score += fastener_score
 
-    # Колодка
+    # Колодка - проверяем в порядке приоритета (mega > best > new)
     left_mega = left_data.get("mega_last")
     left_best = left_data.get("best_last")
     left_new = left_data.get("new_last")
@@ -168,13 +198,14 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     last_score = 0
     last_match = False
 
-    if left_mega and left_mega == right_mega:
+    # Проверяем непустые строки, не только наличие значения
+    if left_mega and str(left_mega).strip() and left_mega == right_mega:
         last_score = cfg.mega_last_bonus
         last_match = True
-    elif left_best and left_best == right_best:
+    elif left_best and str(left_best).strip() and left_best == right_best:
         last_score = cfg.best_last_bonus
         last_match = True
-    elif left_new and left_new == right_new:
+    elif left_new and str(left_new).strip() and left_new == right_new:
         last_score = cfg.new_last_bonus
         last_match = True
 
@@ -193,7 +224,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     # Модель
     left_model = left_data.get("model_name")
     right_model = right_data.get("model_name")
-    model_score = cfg.model_match_bonus if left_model and left_model == right_model else 0
+    model_score = cfg.model_match_bonus if left_model and str(left_model).strip() and left_model == right_model else 0
 
     details["parameters"].append({
         "parameter": "Модель",
@@ -204,7 +235,7 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     })
     total_score += model_score
 
-    # Применяем штраф за отсутствие колодки
+    # Применяем штраф за отсутствие колодки (умножаем на коэффициент < 1)
     adjusted_score = total_score * cfg.no_last_penalty_multiplier if last_score == 0 else total_score
 
     # Ограничиваем максимальным скором
@@ -216,9 +247,9 @@ def calculate_similarity_details(product_left: pd.Series, product_right: pd.Seri
     return details
 
 
-# Получение токенов
-md_token = st.session_state.get("md_token") or st.secrets.get("md_token") if hasattr(st, "secrets") else None
-md_database = st.session_state.get("md_database") or st.secrets.get("md_database") if hasattr(st, "secrets") else None
+# Получение токенов — используем унифицированный паттерн как в других страницах
+md_token = st.session_state.get("md_token") or _sget("md_token")
+md_database = st.session_state.get("md_database") or _sget("md_database")
 
 if not md_token:
     st.warning("MD токен не найден. Укажите его на странице Настройки.")
@@ -232,20 +263,34 @@ with st.form(key="similarity_compare_form"):
 
     with col1:
         st.subheader("Товар слева")
-        wb_sku_left = st.text_input(
-            "WB SKU товара слева",
-            value=st.session_state.get("similarity_wb_sku_left", ""),
-            key="similarity_wb_sku_left",
-            help="Введите WB SKU первого товара для сравнения"
+        input_type_left = st.selectbox(
+            "Тип ввода",
+            options=["WB SKU", "OZ SKU"],
+            index=0,
+            key="input_type_left",
+            help="Выберите тип идентификатора товара"
+        )
+        sku_left = st.text_input(
+            f"{input_type_left} товара слева",
+            value=st.session_state.get("similarity_sku_left", ""),
+            key="similarity_sku_left",
+            help=f"Введите {input_type_left.lower()} первого товара для сравнения"
         )
 
     with col2:
         st.subheader("Товар справа")
-        wb_sku_right = st.text_input(
-            "WB SKU товара справа",
-            value=st.session_state.get("similarity_wb_sku_right", ""),
-            key="similarity_wb_sku_right",
-            help="Введите WB SKU второго товара для сравнения"
+        input_type_right = st.selectbox(
+            "Тип ввода",
+            options=["WB SKU", "OZ SKU"],
+            index=0,
+            key="input_type_right",
+            help="Выберите тип идентификатора товара"
+        )
+        sku_right = st.text_input(
+            f"{input_type_right} товара справа",
+            value=st.session_state.get("similarity_sku_right", ""),
+            key="similarity_sku_right",
+            help=f"Введите {input_type_right.lower()} второго товара для сравнения"
         )
 
     submitted = st.form_submit_button("Сравнить", type="primary")
@@ -255,15 +300,39 @@ if submitted:
         st.error("MD токен отсутствует. Укажите его на странице Настройки.")
         st.stop()
 
-    wb_sku_left_val = wb_sku_left.strip() if wb_sku_left else ""
-    wb_sku_right_val = wb_sku_right.strip() if wb_sku_right else ""
+    sku_left_val = sku_left.strip() if sku_left else ""
+    sku_right_val = sku_right.strip() if sku_right else ""
 
-    if not wb_sku_left_val or not wb_sku_right_val:
-        st.error("Введите оба WB SKU для сравнения")
+    if not sku_left_val or not sku_right_val:
+        st.error("Введите оба идентификатора для сравнения")
         st.stop()
 
+    if sku_left_val == sku_right_val and input_type_left == input_type_right:
+        st.error("Введите разные идентификаторы для сравнения")
+        st.stop()
+
+    # Преобразуем в WB SKU если нужно
+    wb_sku_left_val = sku_left_val
+    wb_sku_right_val = sku_right_val
+
+    if input_type_left == "OZ SKU":
+        with st.spinner(f"Поиск WB SKU для OZ SKU {sku_left_val}..."):
+            wb_sku_left_val = find_wb_sku_by_oz_sku(sku_left_val, md_token, md_database)
+        if not wb_sku_left_val:
+            st.error(f"❌ Не удалось найти WB SKU для OZ SKU {sku_left_val}. "
+                    "Проверьте, что товар существует и имеет совпадающие штрихкоды с WB.")
+            st.stop()
+
+    if input_type_right == "OZ SKU":
+        with st.spinner(f"Поиск WB SKU для OZ SKU {sku_right_val}..."):
+            wb_sku_right_val = find_wb_sku_by_oz_sku(sku_right_val, md_token, md_database)
+        if not wb_sku_right_val:
+            st.error(f"❌ Не удалось найти WB SKU для OZ SKU {sku_right_val}. "
+                    "Проверьте, что товар существует и имеет совпадающие штрихкоды с WB.")
+            st.stop()
+
     if wb_sku_left_val == wb_sku_right_val:
-        st.error("Введите разные WB SKU для сравнения")
+        st.error("Найденные WB SKU совпадают. Выберите разные товары для сравнения.")
         st.stop()
 
     # Получаем данные товаров
@@ -272,11 +341,11 @@ if submitted:
         right_data = get_product_data(wb_sku_right_val, md_token, md_database)
 
     if left_data.empty:
-        st.error(f"Товар с WB SKU {wb_sku_left_val} не найден")
+        st.error(f"❌ Товар с WB SKU {wb_sku_left_val} не найден в базе данных")
         st.stop()
 
     if right_data.empty:
-        st.error(f"Товар с WB SKU {wb_sku_right_val} не найден")
+        st.error(f"❌ Товар с WB SKU {wb_sku_right_val} не найден в базе данных")
         st.stop()
 
     # Рассчитываем схожесть
@@ -284,6 +353,15 @@ if submitted:
 
     # Отображаем результаты
     st.success("✅ Сравнение выполнено")
+
+    # Информация о найденных WB SKU
+    if input_type_left == "OZ SKU" or input_type_right == "OZ SKU":
+        info_parts = []
+        if input_type_left == "OZ SKU":
+            info_parts.append(f"OZ SKU {sku_left_val} → WB SKU {wb_sku_left_val}")
+        if input_type_right == "OZ SKU":
+            info_parts.append(f"OZ SKU {sku_right_val} → WB SKU {wb_sku_right_val}")
+        st.info(f"**Результаты поиска:** {' | '.join(info_parts)}")
 
     # Side-by-side карточки товаров
     col1, col2 = st.columns(2)
