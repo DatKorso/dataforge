@@ -232,6 +232,139 @@ def add_merge_fields_with_duplicates(
     return df
 
 
+def add_merge_fields_for_similarity(
+    df,
+    group_number_col: str = "group_number",
+    wb_sku_col: str = "wb_sku",
+    oz_vendor_col: str = "oz_vendor_code",
+    size_col: str = "oz_manufacturer_size",
+    match_score_col: str = "match_score",
+):
+    """Add merge fields for similarity algorithm with correct duplicate handling.
+    
+    Key differences from basic algorithm:
+    - Duplicates are determined by wb_sku + oz_manufacturer_size (not group_number)
+    - Primary items (best match_score) get merge_code with min wb_sku from their group
+    - Duplicate items get merge_code with their OWN wb_sku
+    - Multiple duplicates of same size get _N suffix
+    
+    Args:
+        df: DataFrame with similarity matching results (must have group_number column)
+        group_number_col: Column name for group number
+        wb_sku_col: Column name for WB SKU
+        oz_vendor_col: Column name for OZ vendor code
+        size_col: Column name for OZ size
+        match_score_col: Column name for match score
+    
+    Returns:
+        DataFrame with merge_code, merge_color, merge_wb_hex, and updated group_number
+    """
+    if df is None or df.empty:
+        return df
+    
+    required_cols = [group_number_col, wb_sku_col, oz_vendor_col, size_col, match_score_col]
+    if not all(col in df.columns for col in required_cols):
+        missing = [c for c in required_cols if c not in df.columns]
+        logger.warning(f"add_merge_fields_for_similarity: Missing required columns: {missing}")
+        return df
+    
+    df = df.copy()
+    
+    # Step 1: Calculate min wb_sku for each group
+    group_min_wb = df.groupby(group_number_col)[wb_sku_col].min().to_dict()
+    
+    # Step 2: Sort by wb_sku, size, and match_score to identify duplicates
+    df = df.sort_values([wb_sku_col, size_col, match_score_col], ascending=[True, True, False])
+    
+    # Step 3: Build merge fields
+    merge_codes = []
+    merge_colors = []
+    merge_hexs = []
+    new_group_numbers = []
+    
+    # Track next available group number for duplicates
+    next_group_num = df[group_number_col].max() + 1 if group_number_col in df.columns else 1
+    
+    for idx, row in df.iterrows():
+        wb_sku = row[wb_sku_col]
+        oz_vendor_code = row[oz_vendor_col]
+        size = row[size_col]
+        original_group = row[group_number_col]
+        
+        # Extract color from oz_vendor_code
+        color, _ = parse_color_from_oz_vendor_code(oz_vendor_code)
+        if not color:
+            color = ""
+        
+        # Calculate own wb_sku hex for merge_color (always use own wb_sku)
+        try:
+            own_wb_int = int(wb_sku)
+            own_hex = format(own_wb_int, 'X')
+        except (ValueError, TypeError):
+            own_hex = str(wb_sku)
+        
+        # Check if this is a duplicate (by wb_sku + size)
+        if pd.notna(size) and str(size).strip():
+            # Find all items with same wb_sku and size
+            mask = (df[wb_sku_col] == wb_sku) & (df[size_col] == size)
+            same_size_items = df.loc[mask]
+            
+            # Determine position (1 = primary, 2+ = duplicates)
+            position = list(same_size_items.index).index(idx) + 1
+            total_count = len(same_size_items)
+            
+            if position == 1:
+                # Primary item - use min wb_sku from group for merge_code
+                min_group_wb = group_min_wb.get(original_group, wb_sku)
+                try:
+                    min_wb_int = int(min_group_wb)
+                    min_hex = format(min_wb_int, 'X')
+                except (ValueError, TypeError):
+                    min_hex = str(min_group_wb)
+                
+                merge_code = f"C-{min_hex}"
+                merge_color_val = f"{color}; {own_hex}" if color else own_hex
+                group_num = original_group
+            else:
+                # Duplicate item - use OWN wb_sku for both merge_code and merge_color
+                # Add suffix for multiple duplicates (3+ items total means 2+ duplicates)
+                if total_count > 2:
+                    merge_code = f"D-{own_hex}_{position}"
+                else:
+                    merge_code = f"D-{own_hex}"
+                
+                merge_color_val = f"{color}; {own_hex}" if color else own_hex
+                
+                # Assign new group number for duplicate
+                group_num = next_group_num
+                next_group_num += 1
+        else:
+            # No size info - treat as primary
+            min_group_wb = group_min_wb.get(original_group, wb_sku)
+            try:
+                min_wb_int = int(min_group_wb)
+                min_hex = format(min_wb_int, 'X')
+            except (ValueError, TypeError):
+                min_hex = str(min_group_wb)
+            
+            merge_code = f"C-{min_hex}"
+            merge_color_val = f"{color}; {own_hex}" if color else own_hex
+            group_num = original_group
+        
+        merge_codes.append(merge_code)
+        merge_colors.append(merge_color_val)
+        merge_hexs.append(own_hex)
+        new_group_numbers.append(group_num)
+    
+    # Assign results
+    df["merge_code"] = merge_codes
+    df["merge_color"] = merge_colors
+    df["merge_wb_hex"] = merge_hexs
+    df[group_number_col] = new_group_numbers
+    
+    return df
+
+
 def mark_duplicate_sizes(
     df,
     primary_prefix: str = "C",

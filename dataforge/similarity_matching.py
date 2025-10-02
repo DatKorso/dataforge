@@ -313,12 +313,7 @@ def search_similar_matches(
     if df_matches.empty:
         return pd.DataFrame(columns=["group_number", "wb_sku", "oz_sku", "oz_vendor_code", "oz_manufacturer_size", "merge_code", "merge_color", "match_score", "similarity_score"])
 
-    def extract_color(oz_vendor_code: str | None) -> str:
-        if not oz_vendor_code:
-            return ""
-        parts = str(oz_vendor_code).split("-")
-        return parts[1].strip() if len(parts) >= 3 else ""
-
+    # Build initial result with group_number and similarity_score
     rows = []
     for _, r in df_matches.iterrows():
         try:
@@ -331,24 +326,27 @@ def search_similar_matches(
             merge_code_to_group[merge_code] = group_num
             group_num += 1
         group_number = merge_code_to_group[merge_code]
-        color_mid = extract_color(r.get("oz_vendor_code"))
-        merge_color = f"{color_mid}; {format(wb, 'X')}" if color_mid else format(wb, 'X')
         rows.append({
             "group_number": group_number,
             "wb_sku": r.get("wb_sku"),
             "oz_sku": r.get("oz_sku"),
             "oz_vendor_code": r.get("oz_vendor_code"),
             "oz_manufacturer_size": r.get("oz_manufacturer_size"),
-            "merge_code": merge_code,
-            "merge_color": merge_color,
             "match_score": int(r.get("match_score") or 0),
             "similarity_score": similarity_scores.get(wb, 0.0),
         })
     out = pd.DataFrame(rows)
+    
     # Deduplicate OZ sizes: keep best score for (wb_sku, oz_sku, oz_manufacturer_size)
     if not out.empty and "oz_manufacturer_size" in out.columns:
         out = out.sort_values(["match_score"], ascending=[False])
         out = out.drop_duplicates(subset=["wb_sku", "oz_sku", "oz_manufacturer_size"], keep="first")
+    
+    # Apply new merge field logic with correct duplicate handling
+    if not out.empty:
+        from dataforge.matching_helpers import add_merge_fields_for_similarity
+        out = add_merge_fields_for_similarity(out)
+    
     return out
 
 

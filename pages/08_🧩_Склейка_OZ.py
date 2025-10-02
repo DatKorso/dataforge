@@ -172,25 +172,6 @@ if submitted:
                     starts_with_brak = df_chunk["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
                     df_chunk = df_chunk.loc[~starts_with_brak]
                 
-                # Add merge_wb_hex helper column if not present
-                if not df_chunk.empty:
-                    def _wb_hex(x):
-                        try:
-                            return format(int(x), 'X')
-                        except Exception:
-                            return ''
-                    if 'merge_wb_hex' not in df_chunk.columns:
-                        df_chunk['merge_wb_hex'] = df_chunk['wb_sku'].apply(_wb_hex)
-                    # Ensure merge_color is present
-                    if 'merge_color' not in df_chunk.columns and 'oz_vendor_code' in df_chunk.columns:
-                        def _color_name(row):
-                            ozvc = row.get('oz_vendor_code')
-                            parts = str(ozvc).split('-') if ozvc else []
-                            mid = parts[1].strip() if len(parts) >= 3 else ''
-                            hx = row.get('merge_wb_hex', '')
-                            return f"{mid}; {hx}" if mid else hx
-                        df_chunk['merge_color'] = df_chunk.apply(_color_name, axis=1)
-                
                 # Accumulate safely
                 df_result = st.session_state.get("oz_merge_result")
                 if df_result is None or (hasattr(df_result, "empty") and df_result.empty):
@@ -206,28 +187,20 @@ if submitted:
             df_similarity = st.session_state["oz_merge_result"]
             
             if st.session_state.get("oz_merge_filter_unique_sizes", True):
-                # Remove duplicates completely
-                if not df_similarity.empty and 'oz_manufacturer_size' in df_similarity.columns and 'group_number' in df_similarity.columns:
+                # Remove duplicates completely - filter by wb_sku + size (not group_number)
+                if not df_similarity.empty and 'oz_manufacturer_size' in df_similarity.columns and 'wb_sku' in df_similarity.columns:
                     mask_known_size = df_similarity['oz_manufacturer_size'].notna() & (df_similarity['oz_manufacturer_size'].astype(str).str.strip() != "")
                     df_known = df_similarity.loc[mask_known_size].copy()
                     df_unknown = df_similarity.loc[~mask_known_size].copy()
                     
                     if not df_known.empty:
                         df_known = df_known.sort_values(['match_score'], ascending=[False])
-                        df_known = df_known.drop_duplicates(subset=['group_number', 'oz_manufacturer_size'], keep='first')
+                        # Dedupe by wb_sku + size (not group_number + size)
+                        df_known = df_known.drop_duplicates(subset=['wb_sku', 'oz_manufacturer_size'], keep='first')
                         df_similarity = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
                     
                     st.session_state["oz_merge_result"] = df_similarity
-            else:
-                # Keep duplicates but mark them with 'D' prefix
-                if not df_similarity.empty:
-                    from dataforge.matching_helpers import mark_duplicate_sizes
-                    df_similarity = mark_duplicate_sizes(
-                        df_similarity,
-                        primary_prefix="C",
-                        duplicate_prefix="D"
-                    )
-                    st.session_state["oz_merge_result"] = df_similarity
+            # Note: If filter_unique_sizes is False, duplicates are already handled by add_merge_fields_for_similarity
             
             # Check for missing wb_sku
             df_similarity = st.session_state["oz_merge_result"]
@@ -254,16 +227,15 @@ if submitted:
                                 starts_with_brak = df_fallback["oz_vendor_code"].fillna("").astype(str).str.startswith(DEFECT_PREFIX)
                                 df_fallback = df_fallback.loc[~starts_with_brak]
                             
-                            # Add merge fields
-                            if not df_fallback.empty and "oz_vendor_code" in df_fallback.columns:
-                                df_fallback = add_merge_fields(df_fallback, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
-                            
-                            # Dedupe sizes
+                            # Dedupe sizes first if needed
                             if st.session_state.get("oz_merge_filter_unique_sizes", True) and not df_fallback.empty:
                                 from dataforge.matching_helpers import dedupe_sizes
                                 df_fallback = dedupe_sizes(df_fallback, input_type="wb_sku")
                             
-                            # Adjust group numbers to not overlap with similarity groups
+                            # Add merge fields after deduplication
+                            if not df_fallback.empty and "oz_vendor_code" in df_fallback.columns:
+                                df_fallback = add_merge_fields(df_fallback, wb_sku_col="wb_sku", oz_vendor_col="oz_vendor_code")
+                            
                             if not df_fallback.empty and "group_number" in df_fallback.columns:
                                 if "group_number" in df_similarity.columns and not df_similarity.empty:
                                     max_existing = df_similarity["group_number"].max()
@@ -282,29 +254,20 @@ if submitted:
                             
                             # Final dedupe/mark after merging
                             if st.session_state.get("oz_merge_filter_unique_sizes", True):
-                                # Remove duplicates
+                                # Remove duplicates - use wb_sku + size for fallback items
                                 df_merged = st.session_state["oz_merge_result"]
-                                if 'oz_manufacturer_size' in df_merged.columns and 'group_number' in df_merged.columns:
+                                if 'oz_manufacturer_size' in df_merged.columns and 'wb_sku' in df_merged.columns:
                                     mask_known_size = df_merged['oz_manufacturer_size'].notna() & (df_merged['oz_manufacturer_size'].astype(str).str.strip() != "")
                                     df_known = df_merged.loc[mask_known_size].copy()
                                     df_unknown = df_merged.loc[~mask_known_size].copy()
                                     
                                     if not df_known.empty:
                                         df_known = df_known.sort_values(['match_score'], ascending=[False])
-                                        df_known = df_known.drop_duplicates(subset=['group_number', 'oz_manufacturer_size'], keep='first')
+                                        # Dedupe by wb_sku + size (works for both similarity and fallback)
+                                        df_known = df_known.drop_duplicates(subset=['wb_sku', 'oz_manufacturer_size'], keep='first')
                                         df_merged = pd.concat([df_known, df_unknown], axis=0, ignore_index=True)
                                     
                                     st.session_state["oz_merge_result"] = df_merged
-                            else:
-                                # Mark duplicates
-                                from dataforge.matching_helpers import mark_duplicate_sizes
-                                df_merged = st.session_state["oz_merge_result"]
-                                df_merged = mark_duplicate_sizes(
-                                    df_merged,
-                                    primary_prefix="C",
-                                    duplicate_prefix="D"
-                                )
-                                st.session_state["oz_merge_result"] = df_merged
                 except Exception as e:
                     st.error(f"❌ Ошибка при выполнении fallback алгоритма: {e}")
                     # Продолжаем с результатами similarity, не прерывая работу
