@@ -32,6 +32,7 @@ from dataforge.imports.metadata import get_all_imports, get_last_import
 from dataforge.imports.reader import read_any
 from dataforge.imports.registry import ReportSpec, get_registry
 from dataforge.imports.validator import ValidationResult, normalize_and_validate
+from dataforge.imports.punta_priority import enrich_primary_barcode_by_punta
 from dataforge.schema import rebuild_punta_products_codes
 from dataforge.secrets import save_secrets
 from dataforge.ui import guard_page, setup_page
@@ -400,8 +401,9 @@ if has_input and report_id != "punta_google":
                 df_norm = vr.df_normalized
                 if spec.id == "wb_products" and "barcodes" in df_norm.columns:
                     df_norm = df_norm.copy()
+                    # Choose the first barcode from the list/string (not the last)
                     df_norm["primary_barcode"] = df_norm["barcodes"].map(
-                        lambda v: _select_barcode(v, prefer_last=True)
+                        lambda v: _select_barcode(v, prefer_last=False)
                     )
                 df_filtered = (
                     filter_df_by_brands(df_norm, allowed_brands)
@@ -481,6 +483,15 @@ if has_input and report_id != "punta_google":
                     allowed_brands = parse_brand_list(brand_raw)
                     if "brand" in df_ready.columns and allowed_brands:
                         df_ready = filter_df_by_brands(df_ready, allowed_brands)
+
+                    # Apply Punta priority-based primary_barcode selection for WB products
+                    if report_id == "wb_products":
+                        with st.spinner("Выбор актуальных штрихкодов по приоритету Punta..."):
+                            df_ready = enrich_primary_barcode_by_punta(
+                                df_ready,
+                                md_token=md_token,
+                                md_database=md_database,
+                            )
 
                     with st.spinner("Загрузка в MotherDuck..."):
                         if report_id in ("punta_barcodes", "punta_products"):
