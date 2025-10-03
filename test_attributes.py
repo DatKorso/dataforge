@@ -9,9 +9,27 @@ from dataforge.attributes import (
     export_attributes_to_excel,
 )
 import pandas as pd
+import toml
+import os
+
+
+def _load_secrets():
+    # Prefer environment variables, fallback to .streamlit/secrets.toml
+    md_token = os.environ.get("MOTHERDUCK_TOKEN")
+    md_database = os.environ.get("MD_DATABASE")
+    if md_token and md_database:
+        return md_token, md_database
+    try:
+        s = toml.load(".streamlit/secrets.toml")
+        return s.get("md_token"), s.get("md_database")
+    except Exception:
+        return md_token, md_database
+
+
+md_token, md_database = _load_secrets()
 
 print("1. Initializing schema...")
-messages = init_schema()
+messages = init_schema(md_token=md_token, md_database=md_database)
 for msg in messages:
     print(f"   - {msg}")
 
@@ -28,16 +46,16 @@ sample_data = pd.DataFrame({
 })
 
 print("   Saving sample data...")
-save_category_mappings("upper_material", sample_data)
+save_category_mappings("upper_material", sample_data, md_token=md_token, md_database=md_database)
 print("   ✓ Saved")
 
 print("\n3. Reading back data...")
-df = get_attributes_by_category("upper_material")
+df = get_attributes_by_category("upper_material", md_token=md_token, md_database=md_database)
 print(f"   Found {len(df)} records:")
 print(df[["id", "punta_value", "wb_value", "oz_value", "lamoda_value"]].to_string(index=False))
 
 print("\n4. Testing export to Excel...")
-excel_file = export_attributes_to_excel()
+excel_file = export_attributes_to_excel(md_token=md_token, md_database=md_database)
 print(f"   ✓ Generated Excel file ({len(excel_file.getvalue())} bytes)")
 
 print("\n✅ All tests passed!")

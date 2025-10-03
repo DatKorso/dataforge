@@ -35,9 +35,10 @@ def test_real_case_wb_sku_168568189():
         md_token = os.environ.get("MOTHERDUCK_TOKEN")
         md_database = os.environ.get("MOTHERDUCK_DATABASE", "dataforge")
     
+    import pytest
+
     if not md_token:
-        print("❌ No MotherDuck token found")
-        return False
+        pytest.skip("No MotherDuck token found in streamlit.secrets or MOTHERDUCK_TOKEN env")
     
     # Test data: wb_sku with two barcodes from different collections
     df_test = pd.DataFrame({
@@ -64,15 +65,14 @@ def test_real_case_wb_sku_168568189():
     
     # Validate
     expected = "4815694741544"
-    if selected == expected:
-        print(f"✅ TEST PASSED: Selected correct barcode (ОЗ-25, priority=14)")
-        return True
-    else:
-        print(f"❌ TEST FAILED: Expected {expected}, got {selected}")
-        print(f"   Should select barcode from collection with MAX(priority)")
-        return False
+    assert selected == expected, (
+        f"Expected primary_barcode {expected} but got {selected}; should pick the barcode from the collection with MAX(priority)"
+    )
 
 
 if __name__ == "__main__":
-    success = test_real_case_wb_sku_168568189()
-    sys.exit(0 if success else 1)
+    try:
+        test_real_case_wb_sku_168568189()
+        sys.exit(0)
+    except Exception:
+        sys.exit(1)

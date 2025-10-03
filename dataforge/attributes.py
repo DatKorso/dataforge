@@ -459,24 +459,48 @@ def merge_with_existing_mappings(
         Merged DataFrame with both existing and new values
     """
     existing_df = get_attributes_by_category(category, md_token=md_token, md_database=md_database)
-    
+
+    # If there are no existing records, ensure new_df IDs will be re-assigned
     if existing_df.empty:
+        # Normalize punta_value strings in new_df
+        new_df = new_df.copy()
+        new_df["punta_value"] = new_df["punta_value"].fillna("").astype(str).str.strip()
+        # Assign IDs starting from 1
+        new_df["id"] = range(1, len(new_df) + 1)
         return new_df
-    
-    # Get existing punta_values
-    existing_punta_values = set(existing_df["punta_value"].dropna())
-    
-    # Filter out values that already exist
-    new_values_df = new_df[~new_df["punta_value"].isin(existing_punta_values)].copy()
-    
+
+    # Normalize punta_value for comparison (trim + lower)
+    existing_df = existing_df.copy()
+    existing_df["_punta_norm"] = (
+        existing_df["punta_value"].fillna("").astype(str).str.strip().str.lower()
+    )
+
+    new_df = new_df.copy()
+    new_df["punta_value"] = new_df["punta_value"].fillna("").astype(str).str.strip()
+    new_df["_punta_norm"] = new_df["punta_value"].str.lower()
+
+    # Determine values that are truly new (normalized comparison)
+    existing_norm_set = set(x for x in existing_df["_punta_norm"].tolist() if x)
+    new_values_df = new_df[~new_df["_punta_norm"].isin(existing_norm_set)].copy()
+
     if new_values_df.empty:
+        # Nothing to add, return existing as-is (drop helper column)
+        existing_df = existing_df.drop(columns=["_punta_norm"])
         return existing_df
-    
-    # Get next available ID
-    max_id = existing_df["id"].max()
+
+    # Get next available ID within the category
+    max_id = int(existing_df["id"].max() or 0)
     new_values_df["id"] = range(max_id + 1, max_id + 1 + len(new_values_df))
-    
-    # Combine existing and new
+
+    # Prepare new rows: ensure expected columns exist and don't overwrite marketplace columns
+    for col in ["wb_value", "oz_value", "lamoda_value", "description", "additional_field"]:
+        if col not in new_values_df.columns:
+            new_values_df[col] = None
+
+    new_values_df = new_values_df[["id", "punta_value", "wb_value", "oz_value", "lamoda_value", "description", "additional_field"]]
+
+    # Combine existing and new; drop helper norm column on existing
+    existing_df = existing_df.drop(columns=["_punta_norm"])
     result_df = pd.concat([existing_df, new_values_df], ignore_index=True)
-    
+
     return result_df

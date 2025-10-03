@@ -96,14 +96,19 @@ for tab_idx, (category_key, category_name) in enumerate(CATEGORY_NAMES.items()):
                         if new_values.empty:
                             st.warning("⚠️ Не найдено значений для импорта из punta_products")
                         else:
-                            # Merge with existing
+                            # Load existing to compute how many will be added
+                            existing_before = get_attributes_by_category(
+                                category_key, md_token=md_token, md_database=md_database
+                            )
+
+                            # Merge with existing (function will deduplicate and reassign IDs)
                             merged_df = merge_with_existing_mappings(
                                 category_key,
                                 new_values,
                                 md_token=md_token,
                                 md_database=md_database,
                             )
-                            
+
                             # Save merged data
                             save_category_mappings(
                                 category_key,
@@ -111,10 +116,10 @@ for tab_idx, (category_key, category_name) in enumerate(CATEGORY_NAMES.items()):
                                 md_token=md_token,
                                 md_database=md_database,
                             )
-                            
-                            new_count = len(new_values)
+
+                            added_count = len(merged_df) - len(existing_before)
                             total_count = len(merged_df)
-                            st.success(f"✅ Импортировано {new_count} новых значений. Всего записей: {total_count}")
+                            st.success(f"✅ Импортировано {added_count} новых значений. Всего записей: {total_count}")
                             st.rerun()
                     except Exception as exc:
                         st.error(f"❌ Ошибка импорта: {exc}")
