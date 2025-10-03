@@ -262,7 +262,49 @@ def get_all_schemas() -> dict[str, TableSchema]:
             group_code VARCHAR(100),
             original_code VARCHAR(100),
             external_code_list TEXT,
-            cost_usd DECIMAL(10,2)
+            cost_usd DECIMAL(10,2),
+            product_type VARCHAR(150),
+            gender_actual VARCHAR(50),
+            upper_construction_1 VARCHAR(150),
+            upper_construction_2 VARCHAR(150),
+            shipment_batch VARCHAR(100),
+            shipment_best VARCHAR(100),
+            upper_material VARCHAR(150),
+            lining_material VARCHAR(150),
+            outsole_material VARCHAR(150),
+            insole_material VARCHAR(150),
+            season VARCHAR(100),
+            heel_presence VARCHAR(150),
+            heel_type_general VARCHAR(150),
+            brand VARCHAR(150),
+            size_scale VARCHAR(100),
+            size_run VARCHAR(100),
+            quantity_pairs INTEGER,
+            color_primary VARCHAR(150),
+            last_new VARCHAR(50),
+            last_mega VARCHAR(50),
+            last_best VARCHAR(50),
+            order_number VARCHAR(100),
+            order_status VARCHAR(100),
+            acceptance_status VARCHAR(100),
+            shipment_status VARCHAR(100),
+            invoice_number VARCHAR(100),
+            container_number VARCHAR(100),
+            fastening_type VARCHAR(150),
+            heel_type VARCHAR(150),
+            wb_platform_height_cm DECIMAL(8,2),
+            wb_heel_height_cm DECIMAL(8,2),
+            wb_shaft_height_cm DECIMAL(8,2),
+            sm_khts_code VARCHAR(100),
+            outsole_stitching VARCHAR(150),
+            label_tag VARCHAR(200),
+            features TEXT,
+            comments_mp_trade TEXT,
+            heel_height_mm INTEGER,
+            forefoot_platform_height_mm INTEGER,
+            outsole_attachment_method VARCHAR(150),
+            width_mm_ko INTEGER,
+            height_mm_ko INTEGER
         )
         """
         idx_defs = [
@@ -316,7 +358,36 @@ def get_all_schemas() -> dict[str, TableSchema]:
             index_sql.append((idx_name, tmpl.format(idx_name)))
         return TableSchema(name=name, create_sql=create, index_sql=index_sql)
 
+    # Attributes mapping schema
+    def _attributes_mapping_schema() -> TableSchema:
+        name = "attributes_mapping"
+        create = f"""
+        CREATE TABLE IF NOT EXISTS "{name}" (
+            id INTEGER NOT NULL,
+            category VARCHAR(50) NOT NULL,
+            punta_value VARCHAR(200),
+            wb_value VARCHAR(200),
+            oz_value VARCHAR(200),
+            lamoda_value VARCHAR(200),
+            description TEXT,
+            additional_field VARCHAR(200),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (category, id)
+        )
+        """
+        idx_defs = [
+            (f"idx_{name}_category", f'CREATE INDEX {{}} ON "{name}" (category)'),
+            (f"idx_{name}_punta_value", f'CREATE INDEX {{}} ON "{name}" (punta_value)'),
+        ]
+        index_sql: list[tuple[str, str]] = []
+        for idx_name, tmpl in idx_defs:
+            index_sql.append((idx_name, tmpl.format(idx_name)))
+        return TableSchema(name=name, create_sql=create, index_sql=index_sql)
+
     punta_colls = _punta_collections_schema()
+
+    attributes_map = _attributes_mapping_schema()
 
     return {
         prod.name: prod,
@@ -328,6 +399,7 @@ def get_all_schemas() -> dict[str, TableSchema]:
         punta_prod.name: punta_prod,
         punta_prod_codes.name: punta_prod_codes,
         punta_colls.name: punta_colls,
+        attributes_map.name: attributes_map,
     }
 
 

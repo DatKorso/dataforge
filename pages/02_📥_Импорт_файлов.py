@@ -411,6 +411,24 @@ if has_input and report_id != "punta_google":
                     else df_norm
                 )
 
+                # For punta_products: only keep rows with order_status == "Передан в логистику"
+                if spec.id == "punta_products":
+                    if "order_status" in df_filtered.columns:
+                        total_before = len(df_filtered)
+                        mask = (
+                            df_filtered["order_status"].astype(str).str.strip() == "Передан в логистику"
+                        )
+                        kept = int(mask.sum())
+                        dropped = total_before - kept
+                        df_filtered = df_filtered[mask]
+                        st.info(
+                            f"Фильтр по статусу заказа применён: оставлено {kept} строк(и), пропущено {dropped} строк(и)"
+                        )
+                    else:
+                        st.warning(
+                            "Колонка 'order_status' не найдена в нормализованных данных — фильтр по статусу заказа не применён."
+                        )
+
                 st.session_state["norm_df"] = df_filtered
                 st.session_state["norm_errors"] = vr.errors
 
@@ -450,7 +468,10 @@ if has_input and report_id != "punta_google":
                 st.dataframe(_arrow_safe(df_filtered.head(20)), width="stretch")
 
                 csv_buf = io.StringIO()
-                vr.df_normalized.to_csv(csv_buf, index=False)
+                # Use the filtered/normalized dataframe for download so any brand filter
+                # or computed adjustments (e.g., primary_barcode enrichment) are included.
+                df_for_download = df_filtered if 'df_filtered' in locals() else vr.df_normalized
+                df_for_download.to_csv(csv_buf, index=False)
                 st.download_button(
                     "Скачать нормализованный CSV",
                     data=csv_buf.getvalue().encode("utf-8"),
