@@ -41,6 +41,9 @@ class MergeConfig:
     article_column_name: str = "Артикул"
     template_sheet_name: str = "Шаблон"
     video_sheet_names: list[str] | None = None
+    # New options
+    append_mode: bool = True  # If True, do not recreate sheets, only append rows after existing content
+    filter_brand_at_end: bool = False  # If True, apply brand filter only after all appends
 
     def __post_init__(self):
         if self.video_sheet_names is None:
@@ -244,6 +247,7 @@ def read_excel_sheet(
     config: MergeConfig,
     sheet_config: SheetConfig,
     template_articles: set[str] | None = None,
+    apply_filters: bool = True,
 ) -> pd.DataFrame:
     """Read and filter a single Excel sheet according to configuration.
 
@@ -266,24 +270,29 @@ def read_excel_sheet(
         try:
             df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
 
-            # Apply brand filter if configured
-            if sheet_config.filter_by_brand and config.brand_filter:
-                brand_col_idx = find_column_index(df, config.brand_column_name, search_row=1)
-                if brand_col_idx is not None:
-                    df = filter_by_brand(
-                        df, config.brand_filter, brand_col_idx, header_rows=sheet_config.header_rows
-                    )
-                else:
-                    logger.warning(f"Brand column not found in sheet '{sheet_name}', skipping brand filter")
+            if apply_filters:
+                # Apply brand filter if configured
+                if sheet_config.filter_by_brand and config.brand_filter:
+                    brand_col_idx = find_column_index(df, config.brand_column_name, search_row=1)
+                    if brand_col_idx is not None:
+                        df = filter_by_brand(
+                            df, config.brand_filter, brand_col_idx, header_rows=sheet_config.header_rows
+                        )
+                    else:
+                        logger.warning(f"Brand column not found in sheet '{sheet_name}', skipping brand filter")
 
-            # Apply article filter if configured
-            if sheet_config.filter_by_articles and template_articles:
-                df = filter_by_articles(
-                    df,
-                    template_articles,
-                    article_column_name=config.article_column_name,
-                    header_rows=sheet_config.header_rows,
-                )
+                # Apply article filter if configured (except defer for video sheets to final stage)
+                if (
+                    sheet_config.filter_by_articles
+                    and template_articles
+                    and sheet_name not in (config.video_sheet_names or [])
+                ):
+                    df = filter_by_articles(
+                        df,
+                        template_articles,
+                        article_column_name=config.article_column_name,
+                        header_rows=sheet_config.header_rows,
+                    )
 
             return df
 
@@ -371,12 +380,14 @@ def merge_excel_files(
             report_progress(progress, f"📋 Объединение листа '{sheet_name}'...")
 
             # Read template sheet with filters
+            # In append_mode we do not want to filter template sheet early if brand filter postponed
             template_df = read_excel_sheet(
                 template_bytes,
                 sheet_name,
                 config,
                 sheet_cfg,
                 template_articles=template_articles,
+                apply_filters=not config.filter_brand_at_end,
             )
 
             # Read and merge additional files
@@ -388,28 +399,146 @@ def merge_excel_files(
                     config,
                     sheet_cfg,
                     template_articles=template_articles,
+                    apply_filters=not config.filter_brand_at_end,
                 )
                 if not df.empty and len(df) > sheet_cfg.header_rows:
                     df = df.iloc[sheet_cfg.header_rows :]
                     additional_dfs.append(df)
 
-            # Combine all dataframes
-            combined_df = (
-                pd.concat([template_df] + additional_dfs, ignore_index=True)
-                if additional_dfs
-                else template_df
-            )
-
-            # Write back to workbook
             ws = wb[sheet_name]
-            ws.delete_rows(1, ws.max_row)
-            for r_idx, row in enumerate(
-                dataframe_to_rows(combined_df, index=False, header=False)
-            ):
-                for c_idx, value in enumerate(row):
-                    ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+
+            if config.append_mode:
+                # Keep existing data; only append additional rows (already without headers)
+                # Ensure template headers exist; if sheet empty write template_df fully
+                if ws.max_row == 0 or ws.max_row == 1 and all([cell.value is None for cell in ws[1]]):
+                    # Write whole template_df as baseline
+                    for r_idx, row in enumerate(
+                        dataframe_to_rows(template_df, index=False, header=False)
+                    ):
+                        for c_idx, value in enumerate(row):
+                            ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+                # Append additional rows at end
+                start_row = ws.max_row + 1
+                for add_df in additional_dfs:
+                    for row in dataframe_to_rows(add_df, index=False, header=False):
+                        if all(v is None for v in row):
+                            continue
+                        for c_idx, value in enumerate(row):
+                            ws.cell(row=start_row, column=c_idx + 1, value=value)
+                        start_row += 1
+            else:
+                # Rebuild sheet from scratch
+                combined_df = (
+                    pd.concat([template_df] + additional_dfs, ignore_index=True)
+                    if additional_dfs
+                    else template_df
+                )
+                ws.delete_rows(1, ws.max_row)
+                for r_idx, row in enumerate(
+                    dataframe_to_rows(combined_df, index=False, header=False)
+                ):
+                    for c_idx, value in enumerate(row):
+                        ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
 
         report_progress(0.90, "💾 Сохранение результата...")
+
+        # Final deferred filtering phase (brand and video sheet article filters)
+        if config.filter_brand_at_end or any(
+            cfg.filter_by_articles and name in (config.video_sheet_names or []) for name, cfg in config.sheets.items()
+        ):
+            report_progress(0.92, "🧹 Финальные фильтры...")
+
+            # Re-extract article codes from (already merged) template sheet if needed for video sheets
+            final_template_articles: set[str] | None = None
+            need_video_articles = any(
+                cfg.filter_by_articles and name in (config.video_sheet_names or [])
+                for name, cfg in config.sheets.items()
+                if cfg.include
+            )
+            if need_video_articles:
+                try:
+                    tmpl_ws = wb[config.template_sheet_name]
+                    data = [list(r) for r in tmpl_ws.iter_rows(values_only=True)]
+                    if data:
+                        df_template = pd.DataFrame(data)
+                        # Attempt to locate article column, assume headers at row 2 (index 1) like earlier logic
+                        art_idx = find_column_index(df_template, config.article_column_name, search_row=1)
+                        if art_idx is not None and len(df_template) > 2:
+                            codes = set()
+                            for row_idx in range(2, len(df_template)):
+                                val = df_template.iat[row_idx, art_idx]
+                                if not pd.isna(val):
+                                    s = str(val).strip()
+                                    if s:
+                                        codes.add(s)
+                            final_template_articles = codes
+                            logger.info(
+                                f"Final template article codes extracted: {len(final_template_articles)} items"
+                            )
+                        else:
+                            logger.warning("Could not find article column for final video filtering")
+                except Exception as e:
+                    logger.error(f"Failed to extract final template articles: {e}", exc_info=True)
+
+            # Iterate sheets for final filtering
+            for sheet_name, sheet_cfg in config.sheets.items():
+                if not sheet_cfg.include:
+                    continue
+                try:
+                    ws = wb[sheet_name]
+                except KeyError:
+                    continue
+
+                # Read current sheet
+                rows_data = [list(r) for r in ws.iter_rows(values_only=True)]
+                if not rows_data:
+                    continue
+                df_sheet = pd.DataFrame(rows_data)
+
+                modified = False
+
+                # Brand filter (deferred)
+                if config.filter_brand_at_end and config.brand_filter and sheet_cfg.filter_by_brand:
+                    brand_col_idx = find_column_index(df_sheet, config.brand_column_name, search_row=1)
+                    if brand_col_idx is not None:
+                        df_sheet = filter_by_brand(
+                            df_sheet,
+                            config.brand_filter,
+                            brand_col_idx,
+                            header_rows=sheet_cfg.header_rows,
+                        )
+                        modified = True
+                    else:
+                        logger.warning(
+                            f"Brand column not found in '{sheet_name}' during final brand filtering"
+                        )
+
+                # Video sheet article filter (deferred)
+                if (
+                    sheet_cfg.filter_by_articles
+                    and sheet_name in (config.video_sheet_names or [])
+                    and final_template_articles
+                ):
+                    before_rows = len(df_sheet)
+                    df_sheet = filter_by_articles(
+                        df_sheet,
+                        final_template_articles,
+                        article_column_name=config.article_column_name,
+                        header_rows=sheet_cfg.header_rows,
+                    )
+                    after_rows = len(df_sheet)
+                    modified = True
+                    logger.info(
+                        f"Deferred article filter for '{sheet_name}': {before_rows}->{after_rows} rows"
+                    )
+
+                if modified:
+                    ws.delete_rows(1, ws.max_row)
+                    for r_idx, row in enumerate(
+                        dataframe_to_rows(df_sheet, index=False, header=False)
+                    ):
+                        for c_idx, value in enumerate(row):
+                            ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
 
         # Save to bytes
         output = BytesIO()

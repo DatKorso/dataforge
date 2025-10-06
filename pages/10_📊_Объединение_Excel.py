@@ -173,6 +173,24 @@ with cols[1]:
         help="Значение бренда для фильтрации (поиск подстроки, регистр не важен)",
     )
 
+# Advanced merge behavior options
+adv_cols = st.columns([2,2])
+with adv_cols[0]:
+    append_mode = st.checkbox(
+        "Только дописывать строки (in-place)",
+        value=True,
+        help="Не пересоздавать листы, а просто дописывать строки из дополнительных файлов в конец существующих.",
+        key="append_mode",
+    )
+with adv_cols[1]:
+    filter_brand_at_end = st.checkbox(
+        "Фильтр бренда в конце",
+        value=False,
+        help="Применить фильтр бренда после объединения/дописывания (полезно при append режиме).",
+        key="filter_brand_at_end",
+        disabled=not enable_brand_filter,
+    )
+
 if enable_brand_filter and not brand_value.strip():
     st.warning("⚠️ Фильтр по бренду включён, но значение не указано")
 
@@ -241,6 +259,8 @@ if st.button("🚀 Объединить файлы", type="primary", use_contain
         merge_config = MergeConfig(
             sheets=sheet_configs,
             brand_filter=brand_value.strip() if enable_brand_filter else None,
+            append_mode=append_mode,
+            filter_brand_at_end=filter_brand_at_end,
         )
 
         # Progress callback
