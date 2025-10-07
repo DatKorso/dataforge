@@ -84,14 +84,30 @@ def find_column_index(
     if df.empty or search_row >= len(df):
         return None
 
+    # Normalize search string for more robust matching
+    normalized_search = column_name.lower().strip()
+
     for col_idx in range(df.shape[1]):
         try:
             cell_value = str(df.iat[search_row, col_idx]) if not pd.isna(df.iat[search_row, col_idx]) else ""
-            if column_name in cell_value:
+            # Normalize cell value: lowercase, strip whitespace, remove common artifacts
+            normalized_cell = cell_value.lower().strip().replace("*", "").replace("\n", " ")
+            
+            # Try both substring match and exact match for flexibility
+            if normalized_search in normalized_cell or normalized_cell in normalized_search:
+                logger.debug(
+                    f"Column match: '{column_name}' found in column {col_idx} "
+                    f"(cell value: '{cell_value[:50]}...' at row {search_row})"
+                )
                 return col_idx
         except (IndexError, KeyError):
             continue
 
+    # Log all header values if column not found for debugging
+    logger.warning(
+        f"Column '{column_name}' not found at row {search_row}. "
+        f"Available values: {[str(df.iat[search_row, i])[:30] if not pd.isna(df.iat[search_row, i]) else 'NaN' for i in range(min(10, df.shape[1]))]}"
+    )
     return None
 
 
@@ -118,17 +134,25 @@ def filter_by_brand(
 
     try:
         if len(df) <= header_rows:
+            logger.debug(f"Brand filter: DataFrame has {len(df)} rows, not enough data beyond {header_rows} header rows")
             return df
 
         header = df.iloc[:header_rows].copy()
         data = df.iloc[header_rows:].copy()
 
+        before_count = len(data)
         mask = (
             data.iloc[:, brand_column_index]
             .astype(str)
             .str.contains(brand_value, case=False, na=False)
         )
         filtered_data = data[mask]
+        after_count = len(filtered_data)
+
+        logger.info(
+            f"Brand filter applied: column_idx={brand_column_index}, "
+            f"brand='{brand_value}', rows {before_count}->{after_count}"
+        )
 
         return pd.concat([header, filtered_data], ignore_index=True)
     except Exception as e:
@@ -156,7 +180,38 @@ def extract_article_codes(
             tmp_path = Path(tmp.name)
 
         try:
-            df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+            # Try reading with pandas first
+            try:
+                df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+            except Exception as parse_err:
+                # Handle XML parsing errors
+                if "not well-formed" in str(parse_err) or "ParseError" in str(type(parse_err).__name__):
+                    logger.warning(
+                        f"Sheet '{sheet_name}' has XML parsing error during article extraction: {parse_err}"
+                    )
+                    
+                    df = None
+                    # Try read_only mode
+                    try:
+                        logger.info(f"Attempting read_only recovery for article extraction from '{sheet_name}'...")
+                        wb_repair = openpyxl.load_workbook(
+                            tmp_path, read_only=True, data_only=True, keep_links=False
+                        )
+                        if sheet_name in wb_repair.sheetnames:
+                            ws_repair = wb_repair[sheet_name]
+                            data_rows = [list(row) for row in ws_repair.iter_rows(values_only=True)]
+                            wb_repair.close()
+                            if data_rows:
+                                df = pd.DataFrame(data_rows)
+                                logger.info(f"Successfully recovered sheet '{sheet_name}' for article extraction")
+                    except Exception as repair_err:
+                        logger.warning(f"Read-only recovery failed for '{sheet_name}': {repair_err}")
+                    
+                    if df is None:
+                        logger.error(f"Failed to recover sheet '{sheet_name}' for article extraction, returning empty set")
+                        return set()
+                else:
+                    raise
 
             if len(df) < 2:
                 return set()
@@ -268,7 +323,66 @@ def read_excel_sheet(
             tmp_path = Path(tmp.name)
 
         try:
-            df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+            # Try reading with pandas first
+            try:
+                df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+            except Exception as parse_err:
+                # Handle XML parsing errors (corrupted Excel files)
+                if "not well-formed" in str(parse_err) or "ParseError" in str(type(parse_err).__name__):
+                    logger.warning(
+                        f"Sheet '{sheet_name}' has XML parsing error: {parse_err}"
+                    )
+                    
+                    # Try multiple recovery strategies
+                    df = None
+                    
+                    # Strategy 1: Load with data_only (ignore formulas)
+                    try:
+                        logger.info(f"Attempting repair strategy 1 (data_only) for '{sheet_name}'...")
+                        wb_repair = openpyxl.load_workbook(tmp_path, read_only=False, data_only=True)
+                        if sheet_name in wb_repair.sheetnames:
+                            ws_repair = wb_repair[sheet_name]
+                            data_rows = []
+                            for row in ws_repair.iter_rows(values_only=True):
+                                data_rows.append(list(row))
+                            wb_repair.close()
+                            if data_rows:
+                                df = pd.DataFrame(data_rows)
+                                logger.info(f"Successfully recovered {len(df)} rows from '{sheet_name}' using strategy 1")
+                        else:
+                            logger.warning(f"Sheet '{sheet_name}' not found in repair workbook")
+                    except Exception as repair1_err:
+                        logger.warning(f"Strategy 1 failed for '{sheet_name}': {repair1_err}")
+                    
+                    # Strategy 2: Try read_only mode with keep_links=False
+                    if df is None:
+                        try:
+                            logger.info(f"Attempting repair strategy 2 (read_only) for '{sheet_name}'...")
+                            wb_repair = openpyxl.load_workbook(
+                                tmp_path, read_only=True, data_only=True, keep_links=False
+                            )
+                            if sheet_name in wb_repair.sheetnames:
+                                ws_repair = wb_repair[sheet_name]
+                                data_rows = []
+                                for row in ws_repair.iter_rows(values_only=True):
+                                    data_rows.append(list(row))
+                                wb_repair.close()
+                                if data_rows:
+                                    df = pd.DataFrame(data_rows)
+                                    logger.info(f"Successfully recovered {len(df)} rows from '{sheet_name}' using strategy 2")
+                        except Exception as repair2_err:
+                            logger.warning(f"Strategy 2 failed for '{sheet_name}': {repair2_err}")
+                    
+                    # If all strategies failed, return empty DataFrame
+                    if df is None:
+                        logger.error(
+                            f"All repair strategies failed for sheet '{sheet_name}'. "
+                            f"This sheet will be skipped. Original error: {parse_err}"
+                        )
+                        return pd.DataFrame()
+                else:
+                    # Re-raise non-XML errors
+                    raise
 
             if apply_filters:
                 # Apply brand filter if configured
@@ -389,6 +503,14 @@ def merge_excel_files(
                 template_articles=template_articles,
                 apply_filters=not config.filter_brand_at_end,
             )
+            
+            # If template sheet is corrupted and returned empty, skip merging for this sheet
+            if template_df.empty:
+                logger.warning(
+                    f"Template sheet '{sheet_name}' is empty or corrupted, skipping merge for this sheet. "
+                    f"Original content will be preserved."
+                )
+                continue
 
             # Read and merge additional files
             additional_dfs = []
@@ -409,14 +531,25 @@ def merge_excel_files(
 
             if config.append_mode:
                 # Keep existing data; only append additional rows (already without headers)
-                # Ensure template headers exist; if sheet empty write template_df fully
-                if ws.max_row == 0 or ws.max_row == 1 and all([cell.value is None for cell in ws[1]]):
-                    # Write whole template_df as baseline
+                # Important: if we're filtering early (not deferred), we need to replace
+                # the existing template data with filtered version first
+                if not config.filter_brand_at_end and (sheet_cfg.filter_by_brand and config.brand_filter):
+                    # Replace existing template data with filtered version
+                    logger.info(f"Applying early brand filter to template in append mode for '{sheet_name}'")
+                    ws.delete_rows(1, ws.max_row)
                     for r_idx, row in enumerate(
                         dataframe_to_rows(template_df, index=False, header=False)
                     ):
                         for c_idx, value in enumerate(row):
                             ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+                elif ws.max_row == 0 or ws.max_row == 1 and all([cell.value is None for cell in ws[1]]):
+                    # Write whole template_df as baseline if sheet is empty
+                    for r_idx, row in enumerate(
+                        dataframe_to_rows(template_df, index=False, header=False)
+                    ):
+                        for c_idx, value in enumerate(row):
+                            ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+                
                 # Append additional rows at end
                 start_row = ws.max_row + 1
                 for add_df in additional_dfs:
@@ -448,20 +581,78 @@ def merge_excel_files(
         ):
             report_progress(0.92, "🧹 Финальные фильтры...")
 
-            # Re-extract article codes from (already merged) template sheet if needed for video sheets
+            # Step 1: First pass - apply brand filter to template and other sheets
+            # This ensures we get the correct article list from filtered template
+            if config.filter_brand_at_end and config.brand_filter:
+                for sheet_name, sheet_cfg in config.sheets.items():
+                    if not sheet_cfg.include or not sheet_cfg.filter_by_brand:
+                        continue
+                    
+                    # Skip video sheets in this pass - they need article filter after brand
+                    is_video_sheet = sheet_name in (config.video_sheet_names or [])
+                    if is_video_sheet and sheet_cfg.filter_by_articles:
+                        continue
+                    
+                    try:
+                        ws = wb[sheet_name]
+                    except KeyError:
+                        logger.warning(f"Sheet '{sheet_name}' not found during brand filtering")
+                        continue
+
+                    try:
+                        rows_data = [list(r) for r in ws.iter_rows(values_only=True)]
+                    except Exception as iter_err:
+                        logger.error(f"Failed to read sheet '{sheet_name}' for brand filtering: {iter_err}")
+                        continue
+                    
+                    if not rows_data:
+                        continue
+                    
+                    df_sheet = pd.DataFrame(rows_data)
+                    brand_col_idx = find_column_index(df_sheet, config.brand_column_name, search_row=1)
+                    
+                    if brand_col_idx is not None:
+                        before_count = len(df_sheet)
+                        df_sheet = filter_by_brand(
+                            df_sheet,
+                            config.brand_filter,
+                            brand_col_idx,
+                            header_rows=sheet_cfg.header_rows,
+                        )
+                        after_count = len(df_sheet)
+                        logger.info(f"Brand filter for '{sheet_name}': {before_count}->{after_count} rows")
+                        
+                        # Rewrite sheet
+                        ws.delete_rows(1, ws.max_row)
+                        for r_idx, row in enumerate(dataframe_to_rows(df_sheet, index=False, header=False)):
+                            for c_idx, value in enumerate(row):
+                                ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+                    else:
+                        logger.warning(f"Brand column not found in '{sheet_name}'")
+
+            # Step 2: Extract article codes from NOW FILTERED template sheet
             final_template_articles: set[str] | None = None
             need_video_articles = any(
                 cfg.filter_by_articles and name in (config.video_sheet_names or [])
                 for name, cfg in config.sheets.items()
                 if cfg.include
             )
+            
             if need_video_articles:
                 try:
                     tmpl_ws = wb[config.template_sheet_name]
-                    data = [list(r) for r in tmpl_ws.iter_rows(values_only=True)]
+                    try:
+                        data = [list(r) for r in tmpl_ws.iter_rows(values_only=True)]
+                    except Exception as iter_err:
+                        logger.error(
+                            f"Failed to iterate rows in template sheet '{config.template_sheet_name}': {iter_err}. "
+                            f"Skipping final article extraction.",
+                            exc_info=True
+                        )
+                        data = []
+                    
                     if data:
                         df_template = pd.DataFrame(data)
-                        # Attempt to locate article column, assume headers at row 2 (index 1) like earlier logic
                         art_idx = find_column_index(df_template, config.article_column_name, search_row=1)
                         if art_idx is not None and len(df_template) > 2:
                             codes = set()
@@ -473,32 +664,44 @@ def merge_excel_files(
                                         codes.add(s)
                             final_template_articles = codes
                             logger.info(
-                                f"Final template article codes extracted: {len(final_template_articles)} items"
+                                f"Article codes extracted from FILTERED template: {len(final_template_articles)} items"
                             )
                         else:
-                            logger.warning("Could not find article column for final video filtering")
+                            logger.warning("Could not find article column in filtered template")
                 except Exception as e:
-                    logger.error(f"Failed to extract final template articles: {e}", exc_info=True)
+                    logger.error(f"Failed to extract articles from filtered template: {e}", exc_info=True)
 
-            # Iterate sheets for final filtering
+            # Step 3: Process video sheets with brand + article filters
             for sheet_name, sheet_cfg in config.sheets.items():
                 if not sheet_cfg.include:
                     continue
+                
+                is_video_sheet = sheet_name in (config.video_sheet_names or [])
+                
+                # Only process video sheets with article filter in this pass
+                if not (is_video_sheet and sheet_cfg.filter_by_articles):
+                    continue
+                
                 try:
                     ws = wb[sheet_name]
                 except KeyError:
+                    logger.warning(f"Video sheet '{sheet_name}' not found")
                     continue
 
-                # Read current sheet
-                rows_data = [list(r) for r in ws.iter_rows(values_only=True)]
+                try:
+                    rows_data = [list(r) for r in ws.iter_rows(values_only=True)]
+                except Exception as iter_err:
+                    logger.error(f"Failed to read video sheet '{sheet_name}': {iter_err}")
+                    continue
+                
                 if not rows_data:
                     continue
+                
                 df_sheet = pd.DataFrame(rows_data)
+                original_count = len(df_sheet)
 
-                modified = False
-
-                # Brand filter (deferred)
-                if config.filter_brand_at_end and config.brand_filter and sheet_cfg.filter_by_brand:
+                # Apply brand filter first
+                if config.brand_filter and sheet_cfg.filter_by_brand:
                     brand_col_idx = find_column_index(df_sheet, config.brand_column_name, search_row=1)
                     if brand_col_idx is not None:
                         df_sheet = filter_by_brand(
@@ -507,38 +710,28 @@ def merge_excel_files(
                             brand_col_idx,
                             header_rows=sheet_cfg.header_rows,
                         )
-                        modified = True
+                        after_brand = len(df_sheet)
+                        logger.info(f"Video sheet '{sheet_name}' brand filter: {original_count}->{after_brand} rows")
                     else:
-                        logger.warning(
-                            f"Brand column not found in '{sheet_name}' during final brand filtering"
-                        )
+                        logger.warning(f"Brand column not found in video sheet '{sheet_name}'")
 
-                # Video sheet article filter (deferred)
-                if (
-                    sheet_cfg.filter_by_articles
-                    and sheet_name in (config.video_sheet_names or [])
-                    and final_template_articles
-                ):
-                    before_rows = len(df_sheet)
+                # Apply article filter second (using filtered template articles)
+                if final_template_articles:
+                    before_article = len(df_sheet)
                     df_sheet = filter_by_articles(
                         df_sheet,
                         final_template_articles,
                         article_column_name=config.article_column_name,
                         header_rows=sheet_cfg.header_rows,
                     )
-                    after_rows = len(df_sheet)
-                    modified = True
-                    logger.info(
-                        f"Deferred article filter for '{sheet_name}': {before_rows}->{after_rows} rows"
-                    )
+                    after_article = len(df_sheet)
+                    logger.info(f"Video sheet '{sheet_name}' article filter: {before_article}->{after_article} rows")
 
-                if modified:
-                    ws.delete_rows(1, ws.max_row)
-                    for r_idx, row in enumerate(
-                        dataframe_to_rows(df_sheet, index=False, header=False)
-                    ):
-                        for c_idx, value in enumerate(row):
-                            ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
+                # Rewrite sheet
+                ws.delete_rows(1, ws.max_row)
+                for r_idx, row in enumerate(dataframe_to_rows(df_sheet, index=False, header=False)):
+                    for c_idx, value in enumerate(row):
+                        ws.cell(row=r_idx + 1, column=c_idx + 1, value=value)
 
         # Save to bytes
         output = BytesIO()
